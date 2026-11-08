@@ -157,6 +157,11 @@ class Window(Adw.ApplicationWindow):
                 bar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=12, margin_end=12,
                                          css_classes=["statusbar-sep"]))
             bar.append(w)
+        self.sb_bad = Gtk.Button(visible=False, valign=Gtk.Align.CENTER, tooltip_text="Show the unhealthy containers")
+        self.sb_bad.add_css_class("flat")
+        self.sb_bad.add_css_class("statusbar-alert")
+        self.sb_bad.connect("clicked", lambda *_: (self.go("containers"), self.pages["containers"].show_unhealthy()))
+        bar.append(self.sb_bad)
         bar.append(self.sb_saver)
         return bar
 
@@ -231,6 +236,12 @@ class Window(Adw.ApplicationWindow):
         cs = self.store.containers
         run = sum(1 for c in cs if c.get("State") == "running")
         self.counts["containers"].set_text(f"{run}/{len(cs)}" if cs else "")
+        from .util import state_of
+        bad = [c for c in cs if state_of(c) == "unhealthy"]
+        self.sb_bad.set_visible(bool(bad))
+        if bad:
+            self.sb_bad.set_label(f"⚠ {len(bad)} unhealthy")
+            self.sb_bad.set_tooltip_text("Unhealthy: " + ", ".join(c["Names"][0].lstrip("/") for c in bad[:8]) + " — click to show")
         self.counts["images"].set_text(str(len(self.store.images)) if self.store.images is not None else "")
         self.counts["volumes"].set_text(str(len(self.store.volumes)) if self.store.volumes is not None else "")
 

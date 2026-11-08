@@ -106,13 +106,13 @@ def _stop(proc, sig):
         pass
 
 
-def run_capture(argv, timeout=60):
-    """Blocking helper for short CLI calls; returns stdout or raises with stderr."""
+def run_capture(argv, timeout=60, merge=False):
+    """Blocking helper for short CLI calls; returns stdout (stdout + stderr with merge=True) or raises with stderr."""
     r = subprocess.run(host(argv), capture_output=True, text=True, timeout=timeout,
                        env=dict(os.environ, NO_COLOR="1", BUILDKIT_PROGRESS="plain"))
     if r.returncode:
         raise RuntimeError((r.stderr or r.stdout).strip()[:500] or f"exit {r.returncode}")
-    return r.stdout
+    return r.stdout + r.stderr if merge else r.stdout
 
 
 def run_command_text(container_cfg):

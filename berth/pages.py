@@ -1028,6 +1028,19 @@ class BuildHistoryPage(TablePage):
             push_detail(self.nav, BuildDetail(self, row.data))
 
 
+def _short_ref(ref):
+    """`buildx history ls` reports refs as builder/node/id, but inspect / logs / rm only accept the id."""
+    return ref.rsplit("/", 1)[-1]
+
+
+def _build_error(e):
+    msg = str(e)
+    if "no record found" in msg:
+        return ("This build's record is no longer kept by BuildKit — records are dropped when the build cache is "
+                "cleared or the history limit is reached. Reload the list to see the builds that are still recorded.")
+    return msg
+
+
 def _secs(b):
     try:
         import calendar
@@ -1067,15 +1080,15 @@ class BuildDetail(Adw.NavigationPage):
             self.tabs.add_titled(Gtk.ScrolledWindow(child=t, vexpand=True), name, title)
         tv.set_content(box)
         self.set_child(tv)
-        ref = b.get("ref", "")
+        ref = _short_ref(b.get("ref", ""))
         for name, argv in (("logs", ["docker", "buildx", "history", "logs", ref]),
                            ("inspect", ["docker", "buildx", "history", "inspect", ref])):
-            bg(run_capture, argv, 120, done=lambda out, n=name: self.views[n].get_buffer().set_text(out or "(empty)"),
-               error=lambda e, n=name: self.views[n].get_buffer().set_text(str(e)))
+            bg(run_capture, argv, 120, True, done=lambda out, n=name: self.views[n].get_buffer().set_text(out or "(empty)"),
+               error=lambda e, n=name: self.views[n].get_buffer().set_text(_build_error(e)))
 
     def _delete(self):
         confirm(self.page.win, "Delete this build record?", "Only the history entry is removed, not the image.", "Delete",
-                lambda: bg(run_capture, ["docker", "buildx", "history", "rm", self.b.get("ref", "")], 60,
+                lambda: bg(run_capture, ["docker", "buildx", "history", "rm", _short_ref(self.b.get("ref", ""))], 60,
                            done=lambda _o: (self.page.win.toast("Build record deleted"), self.page.nav.pop_to_tag("list"),
                                             self.page.on_show()),
                            error=lambda e: self.page.win.toast(str(e))))

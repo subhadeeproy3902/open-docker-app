@@ -376,8 +376,12 @@ def scenario(app):
     if ok:
         bp.on_activate(bp.model.get_item(0))
         bd = bp.nav.get_visible_page()
-        ok = yield from wait_for(lambda: bd.views["logs"].get_buffer().get_char_count() > 50, 60)
-        check("Build log opens", ok)
+        def log_text():
+            b = bd.views["logs"].get_buffer()
+            return b.get_text(b.get_start_iter(), b.get_end_iter(), False)
+        ok = yield from wait_for(lambda: log_text() not in ("", "Loading…") , 60)
+        check("Build log opens (a real log, not an error)", ok and "#1 " in log_text() and "ERROR: no record" not in log_text(),
+              log_text()[:80].replace("\n", " | "))
         shot(win, "11-build-log")
         bp.nav.pop_to_tag("list")
 
@@ -390,6 +394,29 @@ def scenario(app):
         check("Vulnerability scan runs", False, str(e)[:200])
     import shutil
     shutil.rmtree(tmpd, ignore_errors=True)
+
+    # 9b. an unhealthy container is easy to find
+    for c in eng.containers():
+        if "/berth-selftest-sick" in c.get("Names", []):
+            eng.remove_container(c["Id"])
+    sick = eng.create_container("berth-selftest-sick", {"Image": "busybox:latest", "Cmd": ["sleep", "3600"],
+                                "Healthcheck": {"Test": ["CMD", "false"], "Interval": 1_000_000_000, "Retries": 1,
+                                                "StartPeriod": 0, "Timeout": 1_000_000_000}})["Id"]
+    eng.action(sick, "start")
+    from berth.util import state_of
+    ok = yield from wait_for(lambda: (st.refresh("containers") or True) and st.by_id(sick) and state_of(st.by_id(sick)) == "unhealthy", 40)
+    win.go("containers")
+    yield 2
+    cpg = win.pages["containers"]
+    check("Unhealthy count in the Containers title", ok and "unhealthy" in (cpg.wtitle.get_subtitle() or ""), cpg.wtitle.get_subtitle())
+    check("Status bar shows a clickable unhealthy alert", win.sb_bad.get_visible(), win.sb_bad.get_label())
+    win.sb_bad.emit("clicked")
+    yield 1.5
+    shown = [cpg.tree.get_row(i).get_item() for i in range(cpg.tree.get_n_items())]
+    names = [r.data.get("Names", ["?"])[0] if r.kind == "container" else r.key for r in shown]
+    check("Unhealthy filter shows only the unhealthy container", cpg.status_filter == "unhealthy" and names == ["/berth-selftest-sick"], str(names))
+    cpg.run_filter.set_active_name("all")
+    eng.remove_container(sick)
 
     # 10. tray (private D-Bus: a fake tray host stands in for the desktop's)
     from gi.repository import Gio as _Gio

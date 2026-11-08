@@ -176,9 +176,10 @@ class NameCell(Gtk.TreeExpander):
         if row.kind == "project":
             cs = row.data["containers"]
             run = sum(1 for c in cs if c["State"] == "running")
-            self.dot.set_css_classes(["dot", "group", "running" if run else "exited"])
+            bad = sum(1 for c in cs if state_of(c) == "unhealthy")
+            self.dot.set_css_classes(["dot", "group", "unhealthy" if bad else "running" if run else "exited"])
             self.title.set_text(row.key if row.key != STANDALONE else "Standalone")
-            self.sub.set_text(f"{run} of {len(cs)} running · Compose")
+            self.sub.set_text(f"{run} of {len(cs)} running" + (f" · {bad} unhealthy" if bad else "") + " · Compose")
         else:
             c = row.data
             st = state_of(c)
@@ -343,7 +344,7 @@ class ContainersPage(Gtk.Box):
         self.actions = Actions(win, store)
         self.groups, self.items, self._sig = {}, {}, None
         self.expanded = dict(settings["expanded"] or {})
-        self.query, self.only_running = "", False
+        self.query, self.status_filter = "", "all"
 
         self.nav = Adw.NavigationView()
         self.append(self.nav)
@@ -356,8 +357,15 @@ class ContainersPage(Gtk.Box):
         hb.set_title_widget(self.wtitle)
         self.search = Gtk.SearchEntry(placeholder_text="Search containers", width_chars=28)
         self.search.connect("search-changed", self._on_search)
-        run = Gtk.ToggleButton(label="Running only", tooltip_text="Hide stopped containers")
-        run.connect("toggled", self._on_running)
+        run = Adw.ToggleGroup(tooltip_text="Show containers by state")
+        self.filter_toggles = {}
+        for key, lbl in (("all", "All"), ("running", "Running"), ("unhealthy", "Unhealthy"), ("stopped", "Stopped")):
+            t = Adw.Toggle(name=key, label=lbl)
+            self.filter_toggles[key] = t
+            run.add(t)
+        run.set_active_name("all")
+        self.run_filter = run
+        run.connect("notify::active-name", lambda g, *_: self._on_filter(g.get_active_name()))
         exp = icon_button("view-list-symbolic", "Expand / collapse all stacks", self._toggle_all, css=("flat",))
         cmp = Gtk.Button(label="Run Compose file…", tooltip_text="Start a stack from a compose.yaml")
         cmp.add_css_class("suggested-action")
@@ -440,7 +448,7 @@ class ContainersPage(Gtk.Box):
                 connect_row(w, row, "stats", lambda r, w=w: self._stat_text(w, r, idx))
                 connect_row(w, row, "changed", lambda r, w=w: self._stat_text(w, r, idx))
             c = Gtk.ColumnViewColumn(title=title, factory=factory(setup, b, lambda w, *_: disconnect_rows(w)), resizable=True)
-            c.set_fixed_width(70 if idx == 1 else 96)
+            c.set_fixed_width(84 if idx == 1 else 96)
             self.view.append_column(c)
         stat_col("CPU", 1)
         stat_col("Memory", 2)
@@ -461,8 +469,12 @@ class ContainersPage(Gtk.Box):
 
     # ── model sync (in place; no flicker, keeps expansion) ──
     def _match(self, c):
-        if self.only_running and c["State"] != "running":
-            return False
+        f = self.status_filter
+        if f != "all":
+            st = state_of(c)
+            if (f == "running" and c["State"] != "running") or (f == "unhealthy" and st != "unhealthy") or \
+               (f == "stopped" and c["State"] == "running"):
+                return False
         q = self.query
         return not q or any(q in (x or "").lower() for x in (cname(c), c.get("Image"), project(c), service(c)))
 
@@ -478,7 +490,13 @@ class ContainersPage(Gtk.Box):
                                                                sorted(top, key=lambda c: cname(c).lower())]
         sig = tuple((k, key, tuple(c["Id"] for c in v) if k == "project" else None) for k, key, v in entries)
         running = sum(1 for c in self.store.containers if c["State"] == "running")
-        self.wtitle.set_subtitle(f"{running} running · {len(self.store.containers)} total")
+        allc = self.store.containers
+        unhealthy = sum(1 for c in allc if state_of(c) == "unhealthy")
+        stopped = sum(1 for c in allc if c["State"] != "running")
+        self.wtitle.set_subtitle(f"{running} running" + (f" · {unhealthy} unhealthy" if unhealthy else "")
+                                 + f" · {len(allc)} total")
+        for key, n in (("all", len(allc)), ("running", running), ("unhealthy", unhealthy), ("stopped", stopped)):
+            self.filter_toggles[key].set_label(f"{key.capitalize()} {n}" if key != "all" else f"All {n}")
         self.stack.set_visible_child_name("list" if entries else "empty")
         if not entries and self.store.containers:
             self.empty.set_title("Nothing matches")
@@ -544,6 +562,8 @@ class ContainersPage(Gtk.Box):
             it = tr.get_item()
             if it.kind == "project":
                 default = any(c["State"] == "running" for c in it.data["containers"])
+                if any(state_of(c) == "unhealthy" for c in it.data["containers"]):
+                    self.expanded[it.key] = True          # never hide a problem inside a collapsed stack
                 want = self.expanded.get(it.key, default) or bool(self.query)
                 if tr.get_expanded() != want:
                     tr.set_expanded(want)
@@ -571,9 +591,13 @@ class ContainersPage(Gtk.Box):
         self.query = e.get_text().strip().lower()
         self._sync()
 
-    def _on_running(self, b):
-        self.only_running = b.get_active()
+    def _on_filter(self, name):
+        self.status_filter = name or "all"
         self._sync()
+
+    def show_unhealthy(self):
+        """Jump straight to the unhealthy containers (used by the status bar)."""
+        self.run_filter.set_active_name("unhealthy")
 
     def _on_activate(self, _view, pos):
         tr = self.tree.get_row(pos)

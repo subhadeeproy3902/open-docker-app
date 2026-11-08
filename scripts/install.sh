@@ -9,6 +9,7 @@
 #   2. if your libadwaita is older than 1.7 (e.g. Ubuntu 24.04), installs the Flatpak build instead
 #   3. installs Berth for your user into ~/.local (no root needed for this part)
 # Options:  --flatpak  (always use Flatpak)   --no-deps  (skip step 1)   --uninstall
+# Env:      BERTH_ICON=docker-desktop  (use your icon theme's Docker icon instead of Berth's own)
 set -eu
 
 REPO="subhadeeproy3902/open-docker-app"
@@ -123,7 +124,7 @@ install_native() {
   fi
   [ -n "$src" ] || die "Couldn't find Berth's files."
   say "Installing Berth into ~/.local…"
-  make -C "$src" install-user >/dev/null
+  make -C "$src" install-user ICON="${BERTH_ICON:-$APPID}" >/dev/null
   case ":$PATH:" in *":$HOME/.local/bin:"*) ;; *) warn "Add ~/.local/bin to your PATH to run 'berth' from a terminal." ;; esac
   say "Done. Open Berth from your app menu, or run:  berth"
 }

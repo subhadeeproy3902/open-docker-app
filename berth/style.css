@@ -48,3 +48,4 @@ flowboxchild { padding: 0; }
 .berth-table > header > button { padding-top: 6px; padding-bottom: 6px; }
 .berth-table > listview > row > cell { padding-left: 8px; padding-right: 8px; }
 .card.tile .tile-v { margin-top: 2px; }
+.statusbar-alert { color: #c01c28; font-weight: 600; font-size: 0.85em; min-height: 18px; padding: 0 8px; margin-left: 12px; }

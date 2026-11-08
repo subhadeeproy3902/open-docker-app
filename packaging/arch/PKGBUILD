@@ -1,6 +1,6 @@
 # Maintainer: Subhadeep Roy <subha9.5roy350@gmail.com>
 pkgname=berth
-pkgver=1.1.0
+pkgver=1.1.1
 pkgrel=1
 pkgdesc="A light, native Docker desktop for Linux — containers, images, volumes, logs and live stats"
 arch=('any')

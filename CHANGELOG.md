@@ -3,6 +3,14 @@
 All notable changes to Berth are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.1] - 2026-11-08
+
+### Changed
+- **New logo**: a container ship on a wave. It is now the app icon everywhere: Linux app menus and launchers, the
+  macOS `.app` (drawn on Apple's icon grid), the Windows `.exe` (16–256 px), the tray, the About window, the README
+  and the release page. Every size is generated from one artwork by `tools/make_icons.py`.
+- Each release now also carries `berth-logo.png` (1024 px).
+
 ## [1.1.0] - 2026-11-08
 
 ### Changed — a redesigned interface

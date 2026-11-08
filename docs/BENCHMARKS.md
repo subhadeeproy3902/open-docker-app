@@ -29,7 +29,7 @@ Notes:
   cgroup reader is cheaper still.
 - Measured with the Broadway backend (software rendering). On a real Wayland session GTK's GPU renderer adds some
   driver memory; the *Software rendering* switch in Settings avoids the GPU entirely.
-- Installed size: ~1 MB (`~/.local/share/berth`); release tarball 172 KB. GTK 4 and libadwaita are shared system
+- Installed size: ~1 MB (`~/.local/share/berth`); release tarball ~260 KB (most of it is the icon set). GTK 4 and libadwaita are shared system
   libraries; the Flatpak build uses the shared GNOME runtime.
 
 ## Docker Desktop, for comparison

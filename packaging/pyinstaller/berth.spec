@@ -15,5 +15,5 @@ coll = COLLECT(exe, a.binaries, a.datas, name="Berth")
 if sys.platform == "darwin":
     app = BUNDLE(coll, name="Berth.app", icon=icon if os.path.exists(icon) else None,
                  bundle_identifier="io.github.subhadeeproy3902.Berth",
-                 info_plist={"CFBundleShortVersionString": "1.1.0", "NSHighResolutionCapable": True,
+                 info_plist={"CFBundleShortVersionString": "1.1.1", "NSHighResolutionCapable": True,
                              "LSMinimumSystemVersion": "12.0"})

@@ -9,7 +9,7 @@
 #   2. if your libadwaita is older than 1.7 (e.g. Ubuntu 24.04), installs the Flatpak build instead
 #   3. installs Berth for your user into ~/.local (no root needed for this part)
 # Options:  --flatpak  (always use Flatpak)   --no-deps  (skip step 1)   --uninstall
-# Env:      BERTH_ICON=docker-desktop  (use your icon theme's Docker icon instead of Berth's own)
+# Env:      BERTH_ICON=<icon name>  (optional: use another icon from your theme instead of the Berth logo)
 set -eu
 
 REPO="subhadeeproy3902/open-docker-app"
@@ -36,6 +36,7 @@ uninstall() {
          "$HOME/.local/share/applications/$APPID.desktop" "$HOME/.local/share/metainfo/$APPID.metainfo.xml" \
          "$HOME/.local/share/icons/hicolor/scalable/apps/$APPID.svg" \
          "$HOME/.local/share/icons/hicolor/symbolic/apps/$APPID-symbolic.svg"
+  for s in 32 48 64 128 256 512; do rm -f "$HOME/.local/share/icons/hicolor/${s}x${s}/apps/$APPID.png"; done
   say "Berth removed (your settings stay in ~/.config/berth)."
 }
 

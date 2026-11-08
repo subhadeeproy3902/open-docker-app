@@ -19,6 +19,8 @@ install:
 	sed -e 's|@BINDIR@|$(BINDIR)|' -e 's|@ICON@|$(ICON)|' data/$(APPID).desktop.in > $(DESTDIR)$(PREFIX)/share/applications/$(APPID).desktop
 	install -Dm644 data/$(APPID).metainfo.xml $(DESTDIR)$(PREFIX)/share/metainfo/$(APPID).metainfo.xml
 	install -Dm644 data/icons/$(APPID).svg $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APPID).svg
+	for s in 32 48 64 128 256 512; do install -Dm644 data/icons/hicolor/$${s}x$${s}/apps/$(APPID).png \
+	  $(DESTDIR)$(PREFIX)/share/icons/hicolor/$${s}x$${s}/apps/$(APPID).png; done
 	install -Dm644 data/icons/$(APPID)-symbolic.svg $(DESTDIR)$(PREFIX)/share/icons/hicolor/symbolic/apps/$(APPID)-symbolic.svg
 	-[ -z "$(DESTDIR)" ] && gtk-update-icon-cache -q -t $(PREFIX)/share/icons/hicolor 2>/dev/null; true
 	-[ -z "$(DESTDIR)" ] && update-desktop-database -q $(PREFIX)/share/applications 2>/dev/null; true
@@ -31,7 +33,8 @@ uninstall:
 	rm -f $(DESTDIR)$(BINDIR)/berth $(DESTDIR)$(PREFIX)/share/applications/$(APPID).desktop \
 	      $(DESTDIR)$(PREFIX)/share/metainfo/$(APPID).metainfo.xml \
 	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/scalable/apps/$(APPID).svg \
-	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/symbolic/apps/$(APPID)-symbolic.svg
+	      $(DESTDIR)$(PREFIX)/share/icons/hicolor/symbolic/apps/$(APPID)-symbolic.svg \
+	      $(foreach s,32 48 64 128 256 512,$(DESTDIR)$(PREFIX)/share/icons/hicolor/$(s)x$(s)/apps/$(APPID).png)
 
 uninstall-user:
 	$(MAKE) uninstall PREFIX=$(HOME)/.local
@@ -47,5 +50,6 @@ dist:
 	rm -rf dist/berth-$(VERSION) && mkdir -p dist/berth-$(VERSION)
 	cp -r berth data bin scripts Makefile LICENSE README.md dist/berth-$(VERSION)/
 	find dist/berth-$(VERSION) -name __pycache__ -prune -exec rm -rf {} +
+	cd dist/berth-$(VERSION)/data/icons && rm -f berth-logo.png berth-logo-trace.svg berth-512.png berth-1024.png berth-macos-1024.png berth.ico
 	tar -C dist -czf dist/berth-linux.tar.gz berth-$(VERSION)
 	@echo "dist/berth-linux.tar.gz"

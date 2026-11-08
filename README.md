@@ -90,7 +90,7 @@ Measured with [`tools/bench.py`](tools/bench.py) on an i5-12450H laptop with 6 r
 | CPU while showing live stats | **0.4 % of one core** |
 | CPU when the window is not focused (resource saver) | **~0.1 % of one core** |
 | CPU / RAM after closing the window | **0 / 0** (the process exits) |
-| Installed size | **~1 MB** (release tarball: 172 KB) |
+| Installed size | **~1 MB** (release tarball: ~260 KB) |
 
 ```text
 Memory used while working

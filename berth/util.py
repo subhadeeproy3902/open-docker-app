@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
 APP_ID = "io.github.subhadeeproy3902.Berth"
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 ICON = os.environ.get("BERTH_ICON") or APP_ID     # icon name; `make install ICON=docker-desktop` swaps it
 
 

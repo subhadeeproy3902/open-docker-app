@@ -82,6 +82,13 @@ jobs:
         run: .venv/bin/pyinstaller --noconfirm packaging/pyinstaller/berth.spec
       - name: Smoke test
         run: ./dist/Berth.app/Contents/MacOS/Berth --version
+      - name: Launch test (the app renders its own window to a PNG, then quits)
+        timeout-minutes: 3
+        run: |
+          BERTH_SHOT_DELAY=6 ./dist/Berth.app/Contents/MacOS/Berth --screenshot "$PWD/launch-macos.png"
+          test -s launch-macos.png
+      - uses: actions/upload-artifact@v4
+        with: { name: launch-screenshot-macos, path: launch-macos.png }
       - name: Disk image
         run: hdiutil create -volname Berth -srcfolder dist/Berth.app -ov -format UDZO dist/Berth-macos-arm64.dmg
       - uses: actions/upload-artifact@v4
@@ -113,6 +120,13 @@ jobs:
         run: python -m PyInstaller --noconfirm packaging/pyinstaller/berth.spec
       - name: Smoke test
         run: ./dist/Berth/Berth.exe --version
+      - name: Launch test (the app renders its own window to a PNG, then quits)
+        timeout-minutes: 3
+        run: |
+          BERTH_SHOT_DELAY=6 ./dist/Berth/Berth.exe --screenshot "$(cygpath -w "$PWD")\\launch-windows.png"
+          test -s launch-windows.png
+      - uses: actions/upload-artifact@v4
+        with: { name: launch-screenshot-windows, path: launch-windows.png }
       - name: Zip
         run: cd dist && zip -qr Berth-windows-x64.zip Berth
       - uses: actions/upload-artifact@v4

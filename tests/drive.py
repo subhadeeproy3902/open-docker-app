@@ -498,9 +498,9 @@ def scenario(app):
     sp._switch("/tmp/berth-no-engine.sock")
     ok = yield from wait_for(lambda: st.up is False, 15)
     check("Switching to a missing engine shows it as stopped", ok and win.stack.get_visible_child_name() == "off")
-    sp._switch("unix://" + real)
+    sp._switch(real if real.startswith("tcp://") else "unix://" + real)
     ok = yield from wait_for(lambda: st.up and st.containers, 20)
-    check("Switching back reconnects (unix:// form)", ok)
+    check("Switching back reconnects" + ("" if real.startswith("tcp://") else " (unix:// form)"), ok)
     sp._switch(real)
     yield from wait_for(lambda: st.up and st.containers, 20)
     eng = st.engine

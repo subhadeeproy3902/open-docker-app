@@ -9,7 +9,7 @@ from gi.repository import Adw, Gdk, GLib, Gtk, Pango
 
 from . import charts
 from .engine import demux
-from .util import bg, cname, esc, fmt_bytes, icon_button, label, labels, thread
+from .util import PageHeader, bg, cname, esc, flat_page, fmt_bytes, icon_button, label, labels, thread
 
 LEVELS = ("debug", "info", "warn", "error")
 COL = {"error": "#f0605d", "warn": "#e8b04a", "info": "#5b9cf5", "debug": "#8a90a0"}
@@ -198,7 +198,7 @@ class LogsExplorer(Gtk.Box):
         self._ttys = {}
         self._idle_ticks = 0
 
-        bar = Gtk.Box(spacing=8, margin_start=12, margin_end=12, margin_top=8, margin_bottom=4)
+        bar = Gtk.Box(spacing=8, css_classes=["explorer-bar"])
         if picker:
             bar.append(picker)
         self.range = Adw.ToggleGroup()
@@ -217,7 +217,7 @@ class LogsExplorer(Gtk.Box):
         bar.append(self.regex)
         self.append(bar)
 
-        bar2 = Gtk.Box(spacing=6, margin_start=12, margin_end=12, margin_bottom=4)
+        bar2 = Gtk.Box(spacing=6, css_classes=["explorer-bar", "second"])
         self.chips = {}
         for lv in reversed(LEVELS):
             b = Gtk.ToggleButton(active=True)
@@ -245,11 +245,11 @@ class LogsExplorer(Gtk.Box):
             bar2.append(w)
         self.append(bar2)
 
-        hcard = Gtk.Box(css_classes=["card"], margin_start=12, margin_end=12, margin_top=4, margin_bottom=6)
+        hcard = Gtk.Box(css_classes=["card", "explorer-hist"])
         self.hist = Histogram(self._set_zoom)
         hcard.append(self.hist)
         self.append(hcard)
-        self.status = label("", css=["dim-label", "caption"], margin_start=14, margin_bottom=2)
+        self.status = label("", css=["dim-label", "caption", "explorer-status"])
         self.append(self.status)
 
         self.text = Gtk.TextView(editable=False, cursor_visible=False, monospace=True,
@@ -556,9 +556,7 @@ class LogsPage(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.win, self.store = win, store
         tv = Adw.ToolbarView(vexpand=True)
-        hb = Adw.HeaderBar()
-        hb.set_title_widget(Adw.WindowTitle(title="Logs", subtitle="Every container's logs in one place"))
-        tv.add_top_bar(hb)
+        flat_page(tv, PageHeader("Logs", "Every container's logs in one place — pick a stack or container, a time range, a level"))
         self.choices = []          # [(label, kind, value)]
         self.model = Gtk.StringList()
         self.picker = Gtk.DropDown(model=self.model, enable_search=True, tooltip_text="Which containers")

@@ -76,7 +76,7 @@ Linux にはすでに Docker Engine があります。それでも Docker Deskto
 | <img src="docs/screenshots/logs-explorer-dark.png" alt="ログエクスプローラー"> **ログエクスプローラー**：レベル別に色分けしたヒストグラム、ドラッグで時間ズーム、ライブ / 5 分 … 7 日、レベル別フィルターと件数、正規表現検索。 | <img src="docs/screenshots/resource-usage-dark.png" alt="リソース使用量"> **リソース使用量**：Compose プロジェクトごとの CPU とメモリのライブグラフ、合計、重いコンテナ一覧。 |
 | <img src="docs/screenshots/files-editor-light.png" alt="ファイル編集"> **ファイル**：実行中コンテナやボリューム内のファイルを閲覧・**編集**、アップロード、ダウンロード、名前変更、削除。 | <img src="docs/screenshots/images-dark.png" alt="イメージ"> **イメージ**：Docker Hub の検索と pull、ポート / 環境変数付きで実行、脆弱性スキャン、タグ付け、push、保存 / 読み込み。 |
 
-ほかにも：Compose ごとのコンテナ管理、Exec の内蔵ターミナル（VTE）、コンテナの編集（安全な再作成）、Compose の実行 / 編集、ボリュームのエクスポート・インポート・複製、ネットワークの接続 / 切断、ビルド履歴とビルドキャッシュ、ディスク使用量、Kubernetes（Pod / Deployment / Service / Node、YAML 編集、kind のローカルクラスター）、エンジン切り替え（Docker / rootless / Podman / context / tcp）、レジストリへのサインイン、任意のトレイアイコン、ライト / ダークテーマ。
+ほかにも：Compose ごとのコンテナ管理、Exec の内蔵ターミナル（VTE）、コンテナの編集（安全な再作成）、Compose の実行 / 編集、ボリュームのエクスポート・インポート・複製、ネットワークの接続 / 切断、ビルド履歴とビルドキャッシュ、ディスク使用量、Kubernetes（Pod / Deployment / Service / Node、YAML 編集、kind のローカルクラスター）、エンジン切り替え（Docker / rootless / Podman / context / tcp）、レジストリへのサインイン、任意のトレイアイコン、ライト / ダークテーマ、アクセシビリティ設定（文字サイズ 85–150 %、表示密度 コンパクト / 標準 / ゆったり、くっきりした枠線とコントラスト、大きいアイコン、アニメーションを減らす）。
 
 ## インストール
 
@@ -103,6 +103,8 @@ Docker ソケットへのアクセス権が必要です：`sudo usermod -aG dock
 
 ### macOS
 
+> 詳しい手順：**[docs/INSTALL-macOS.md](docs/INSTALL-macOS.md)**（Apple アカウントも支払いも不要）。
+
 [最新リリース](https://github.com/subhadeeproy3902/open-docker-app/releases/latest) から **`Berth-macos-arm64.dmg`** をダウンロードし、アプリケーションフォルダへドラッグします。まだ公証されていないため、初回は次を実行してください：
 
 ```sh
@@ -112,6 +114,8 @@ xattr -dr com.apple.quarantine /Applications/Berth.app
 Mac では Docker エンジンが必要です：**Colima**（`brew install colima docker && colima start`）、OrbStack、Rancher Desktop、Docker Desktop。ソケットは自動で見つけます。
 
 ### Windows
+
+> 詳しい手順：**[docs/INSTALL-Windows.md](docs/INSTALL-Windows.md)**（コード署名証明書は不要）。
 
 [最新リリース](https://github.com/subhadeeproy3902/open-docker-app/releases/latest) から **`Berth-windows-x64.zip`** をダウンロードして展開し、`Berth.exe` を実行。TCP でエンジンに接続します（Docker Desktop：*Settings → General → Expose daemon on tcp://localhost:2375*）。現時点で最も快適なのは **WSL 2** 内で Linux 版を動かす方法です（WSLg がウィンドウを表示します）。
 

@@ -91,3 +91,27 @@ def apply(name):
     _provider = Gtk.CssProvider()
     _provider.load_from_string(css)
     Gtk.StyleContext.add_provider_for_display(display, _provider, Gtk.STYLE_PROVIDER_PRIORITY_USER + 1)
+
+
+# ── accessibility ──
+_base_dpi = None
+DENSITIES = ("compact", "comfortable", "spacious")
+TEXT_SIZES = (85, 100, 115, 130, 150)
+
+
+def apply_accessibility(window, s):
+    """Text size, density, stronger borders, reduced motion and larger icons — applied live to the whole window."""
+    global _base_dpi
+    gs = Gtk.Settings.get_default()
+    if _base_dpi is None:
+        _base_dpi = gs.get_property("gtk-xft-dpi")
+        if _base_dpi is None or _base_dpi <= 0:
+            _base_dpi = 96 * 1024
+    scale = int(s["text_scale"] or 100)
+    gs.set_property("gtk-xft-dpi", int(_base_dpi * scale / 100))
+    gs.set_property("gtk-enable-animations", not s["reduce_motion"])
+    density = s["density"] if s["density"] in DENSITIES else "comfortable"
+    for d in DENSITIES:
+        (window.add_css_class if d == density else window.remove_css_class)(f"density-{d}")
+    (window.add_css_class if s["strong_borders"] else window.remove_css_class)("strong-borders")
+    (window.add_css_class if s["large_icons"] else window.remove_css_class)("large-icons")

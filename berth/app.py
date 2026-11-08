@@ -10,6 +10,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gsk, Gtk  # noqa: E402
 
 from .containers import ContainersPage  # noqa: E402
 from . import theme  # noqa: E402
+from .theme import apply_accessibility  # noqa: E402
 from .files import cleanup_helpers  # noqa: E402
 from .k8s import K8sPage  # noqa: E402
 from .logs import LogsPage  # noqa: E402
@@ -76,7 +77,7 @@ class Window(Adw.ApplicationWindow):
         self.sidebar.connect("row-selected", lambda _l, r: r and self.go(r.key, from_sidebar=True))
         self.sidebar.set_vexpand(True)
         side.set_content(Gtk.ScrolledWindow(child=self.sidebar, vexpand=True))
-        self.engine_box = Gtk.Box(spacing=8, margin_start=14, margin_end=10, margin_top=8, margin_bottom=10)
+        self.engine_box = Gtk.Box(spacing=8, css_classes=["engine-card"])
         self.engine_dot = Gtk.Box(valign=Gtk.Align.CENTER, css_classes=["dot", "exited"])
         self.engine_lbl = label("Connecting…", css=["caption"])
         self.engine_btn = icon_button("system-shutdown-symbolic", "Stop Docker Engine", self.engine_toggle)
@@ -127,6 +128,7 @@ class Window(Adw.ApplicationWindow):
             bp.add_setter(col, "visible", False)
         self.add_breakpoint(bp)
         self.set_size_request(760, 520)
+        apply_accessibility(self, settings)
         self.page = settings["page"] if settings["page"] in self.pages else "containers"
         self.select_row(self.page)
         self.stack.set_visible_child_name("off")

@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
 APP_ID = "io.github.subhadeeproy3902.Berth"
-VERSION = "1.0.1"
+VERSION = "1.1.0"
 ICON = os.environ.get("BERTH_ICON") or APP_ID     # icon name; `make install ICON=docker-desktop` swaps it
 
 
@@ -127,7 +127,9 @@ def labels(c):
 # ── settings (~/.config/berth/settings.json) ──
 class Settings:
     DEFAULTS = {"theme": "system", "saver": True, "interval": 2, "window": [1240, 800], "expanded": {},
-                "software": False, "range": 600, "page": "containers", "tray": False, "engine": ""}
+                "software": False, "range": 600, "page": "containers", "tray": False, "engine": "",
+                "text_scale": 100, "density": "comfortable", "strong_borders": False, "reduce_motion": False,
+                "large_icons": False}
 
     def __init__(self):
         self.path = os.path.join(GLib.get_user_config_dir(), "berth", "settings.json")
@@ -288,6 +290,58 @@ def icon_button(icon, tooltip, cb=None, css=("flat",)):
     if cb:
         b.connect("clicked", lambda *_: cb())
     return b
+
+
+class PageHeader(Gtk.Box):
+    """Large page title + live summary line on the left, the page's main actions on the right.
+    Drop-in for Adw.WindowTitle (set_title / set_subtitle / get_subtitle)."""
+
+    def __init__(self, title, subtitle=""):
+        super().__init__(spacing=16, css_classes=["page-header"])
+        text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True, valign=Gtk.Align.CENTER)
+        self._t = Gtk.Label(label=title, xalign=0, css_classes=["page-title"])
+        from gi.repository import Pango
+        self._s = Gtk.Label(label=subtitle, xalign=0, css_classes=["page-subtitle"], ellipsize=Pango.EllipsizeMode.END,
+                            visible=bool(subtitle))
+        text.append(self._t)
+        text.append(self._s)
+        self.append(text)
+        self.actions = Gtk.Box(spacing=8, valign=Gtk.Align.CENTER)
+        self.append(self.actions)
+
+    def add(self, widget):
+        self.actions.append(widget)
+        return widget
+
+    def set_title(self, t):
+        self._t.set_text(t)
+
+    def set_subtitle(self, t):
+        self._s.set_text(t or "")
+        self._s.set_visible(bool(t))
+
+    def get_subtitle(self):
+        return self._s.get_text()
+
+
+def flat_page(tv, header, toolbar=None):
+    """The standard page frame: a flat header bar (window controls only), the page header, an optional toolbar."""
+    hb = Adw.HeaderBar(show_title=False)
+    tv.set_top_bar_style(Adw.ToolbarStyle.FLAT)
+    tv.add_top_bar(hb)
+    tv.add_top_bar(header)
+    if toolbar is not None:
+        tv.add_top_bar(toolbar)
+    return hb
+
+
+def table_card(child):
+    """A table inside a rounded card with page margins (instead of running edge to edge)."""
+    sw = child if isinstance(child, Gtk.ScrolledWindow) else Gtk.ScrolledWindow(child=child)
+    sw.set_vexpand(True)
+    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, css_classes=["table-card"], vexpand=True, overflow=Gtk.Overflow.HIDDEN)
+    card.append(sw)
+    return card
 
 
 def toolbar_row(*widgets):

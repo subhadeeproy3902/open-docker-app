@@ -8,7 +8,7 @@ from gi.repository import Adw, GLib, Gtk
 
 from . import registry, theme
 from .engine import discover
-from .util import IS_LINUX, VERSION, bg, esc, fmt_bytes, host
+from .util import IS_LINUX, VERSION, PageHeader, bg, esc, flat_page, fmt_bytes, host
 
 DAEMON_JSON = "/etc/docker/daemon.json"
 
@@ -21,9 +21,7 @@ class SettingsPage(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.win, self.store, self.s = win, store, settings
         tv = Adw.ToolbarView(vexpand=True)
-        hb = Adw.HeaderBar()
-        hb.set_title_widget(Adw.WindowTitle(title="Settings"))
-        tv.add_top_bar(hb)
+        flat_page(tv, PageHeader("Settings", "Appearance, accessibility, the Docker Engine and registries"))
         pp = Adw.PreferencesPage()
         tv.set_content(pp)
         self.append(tv)
@@ -40,6 +38,27 @@ class SettingsPage(Gtk.Box):
         soft.connect("notify::active", lambda r, *_: settings.__setitem__("software", r.get_active()))
         g.add(soft)
         pp.add(g)
+
+        ga = Adw.PreferencesGroup(title="Accessibility", description="Make Berth easier to read and use. Changes apply instantly.")
+        sizes = list(theme.TEXT_SIZES)
+        txt = Adw.ComboRow(title="Text size", subtitle="Scales every label, table and chart",
+                           model=Gtk.StringList.new([f"{v} %" + (" (default)" if v == 100 else "") for v in sizes]))
+        cur = int(settings["text_scale"] or 100)
+        txt.set_selected(sizes.index(cur) if cur in sizes else 1)
+        txt.connect("notify::selected", lambda r, *_: self._a11y("text_scale", sizes[r.get_selected()]))
+        ga.add(txt)
+        dens = Adw.ComboRow(title="Density", subtitle="Row height and spacing",
+                            model=Gtk.StringList.new(["Compact", "Comfortable (default)", "Spacious"]))
+        dens.set_selected(list(theme.DENSITIES).index(settings["density"]) if settings["density"] in theme.DENSITIES else 1)
+        dens.connect("notify::selected", lambda r, *_: self._a11y("density", theme.DENSITIES[r.get_selected()]))
+        ga.add(dens)
+        for key, title, sub in (("strong_borders", "Stronger borders and contrast", "Clear outlines around cards, tables, buttons and inputs"),
+                                ("large_icons", "Larger icons", "Bigger icons in the sidebar, toolbars and tables"),
+                                ("reduce_motion", "Reduce motion", "Turn off sliding and fading animations")):
+            row = Adw.SwitchRow(title=title, subtitle=sub, active=bool(settings[key]))
+            row.connect("notify::active", lambda r, *_, k=key: self._a11y(k, r.get_active()))
+            ga.add(row)
+        pp.add(ga)
 
         g2 = Adw.PreferencesGroup(title="Resource saver",
                                   description="Berth reads live numbers only while you can see them, and nothing runs once the window is closed.")
@@ -108,6 +127,10 @@ class SettingsPage(Gtk.Box):
         about.add(ab)
         pp.add(about)
         store.connect("engine", lambda *_: self.on_show())
+
+    def _a11y(self, key, value):
+        self.s[key] = value
+        theme.apply_accessibility(self.win, self.s)
 
     # ── engines ──
     def _fill_engines(self):

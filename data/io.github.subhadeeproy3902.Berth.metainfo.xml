@@ -22,5 +22,5 @@
     <screenshot><caption>Live resource usage</caption><image>https://raw.githubusercontent.com/subhadeeproy3902/open-docker-app/main/docs/screenshots/resource-usage-light.png</image></screenshot>
   </screenshots>
   <content_rating type="oars-1.1"/>
-  <releases><release version="1.0.1" date="2026-11-08"><description><p>Fixes the build history page, adds an Unhealthy filter and status-bar alert.</p></description></release><release version="1.0.0" date="2026-11-08"><description><p>First public release.</p></description></release></releases>
+  <releases><release version="1.1.0" date="2026-11-08"><description><p>A redesigned interface with consistent page headers, tables in cards and an 8-point spacing system, plus accessibility settings: text size, density, stronger borders, larger icons and reduced motion.</p></description></release><release version="1.0.1" date="2026-11-08"><description><p>Fixes the build history page, adds an Unhealthy filter and status-bar alert.</p></description></release><release version="1.0.0" date="2026-11-08"><description><p>First public release.</p></description></release></releases>
 </component>

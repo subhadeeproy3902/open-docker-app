@@ -80,6 +80,10 @@ jobs:
           iconutil -c icns berth.iconset -o data/icons/berth.icns
       - name: Build Berth.app
         run: .venv/bin/pyinstaller --noconfirm packaging/pyinstaller/berth.spec
+      - name: Ad-hoc sign (no Apple account needed; avoids the "is damaged" error on Apple Silicon)
+        run: |
+          codesign --force --deep --sign - dist/Berth.app
+          codesign --verify --deep --strict --verbose=2 dist/Berth.app
       - name: Smoke test
         run: ./dist/Berth.app/Contents/MacOS/Berth --version
       - name: Launch test (the app renders its own window to a PNG, then quits)

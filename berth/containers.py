@@ -17,7 +17,7 @@ from .logs import LogsExplorer
 from .util import (Row, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
                    fmt_rate, icon_button, label, labels, open_uri, short_status, spawn, state_of,
                    terminal_argv, themed, thread, detail_tag, push_detail, toolbar_row,
-                   run_in_terminal)
+                   run_in_terminal, PageHeader, flat_page, table_card)
 
 try:
     gi.require_version("Vte", "3.91")
@@ -161,7 +161,7 @@ class Actions:
 class NameCell(Gtk.TreeExpander):
     def __init__(self):
         super().__init__(indent_for_icon=True)
-        box = Gtk.Box(spacing=10, width_request=210)
+        box = Gtk.Box(spacing=10, width_request=180)
         self.dot = Gtk.Box(valign=Gtk.Align.CENTER, css_classes=["dot"])
         col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
         self.title = label(css=["heading-sm"])
@@ -198,12 +198,26 @@ class TextCell(Gtk.Label):
 
 class StatCell(Gtk.DrawingArea):
     """A number that changes every couple of seconds. Drawn, not a Gtk.Label, so updating it only
-    repaints this cell instead of re-measuring the whole table."""
+    repaints this cell instead of re-measuring the whole table. Its size comes from the current font,
+    so it grows with Settings → Accessibility → Text size."""
+    TEMPLATE = "000.0 MB"
 
     def __init__(self):
-        super().__init__(content_width=80, content_height=20, valign=Gtk.Align.CENTER, halign=Gtk.Align.END)
+        super().__init__(valign=Gtk.Align.CENTER, halign=Gtk.Align.END)
         self.text = "—"
         self.set_draw_func(self._draw)
+
+    def _layout(self, text):
+        layout = self.create_pango_layout(text)
+        fd = layout.get_context().get_font_description() or Pango.FontDescription()
+        fd.set_family("monospace")
+        layout.set_font_description(fd)
+        return layout
+
+    def do_measure(self, orientation, for_size):
+        w, h = self._layout(self.TEMPLATE).get_pixel_size()
+        n = w + 4 if orientation == Gtk.Orientation.HORIZONTAL else h + 4
+        return n, n, -1, -1
 
     def set_text(self, t):
         if t != self.text:
@@ -212,10 +226,7 @@ class StatCell(Gtk.DrawingArea):
 
     def _draw(self, _a, cr, w, h):
         from gi.repository import PangoCairo
-        layout = self.create_pango_layout(self.text)
-        fd = layout.get_context().get_font_description() or Pango.FontDescription()
-        fd.set_family("monospace")
-        layout.set_font_description(fd)
+        layout = self._layout(self.text)
         tw, th = layout.get_pixel_size()
         c = self.get_color()
         cr.set_source_rgba(c.red, c.green, c.blue, c.alpha * (0.55 if self.text == "—" else 1))
@@ -352,9 +363,7 @@ class ContainersPage(Gtk.Box):
 
         # header
         tv = Adw.ToolbarView()
-        hb = Adw.HeaderBar()
-        self.wtitle = Adw.WindowTitle(title="Containers")
-        hb.set_title_widget(self.wtitle)
+        self.wtitle = PageHeader("Containers")
         self.search = Gtk.SearchEntry(placeholder_text="Search containers", width_chars=28)
         self.search.connect("search-changed", self._on_search)
         run = Adw.ToggleGroup(tooltip_text="Show containers by state")
@@ -370,9 +379,8 @@ class ContainersPage(Gtk.Box):
         cmp = Gtk.Button(label="Run Compose file…", tooltip_text="Start a stack from a compose.yaml")
         cmp.add_css_class("suggested-action")
         cmp.connect("clicked", lambda *_: compose.ComposeOpen(self.win, self.store).present(self.win))
-        hb.pack_end(cmp)
-        tv.add_top_bar(hb)
-        tv.add_top_bar(toolbar_row(self.search, run, Gtk.Box(hexpand=True), exp))
+        self.wtitle.add(cmp)
+        flat_page(tv, self.wtitle, toolbar_row(self.search, run, Gtk.Box(hexpand=True), exp))
 
         # list
         self.root = Gio.ListStore(item_type=Row)
@@ -383,7 +391,7 @@ class ContainersPage(Gtk.Box):
         self.view.add_css_class("berth-table")
         self.view.connect("activate", self._on_activate)
         self._columns()
-        sw = Gtk.ScrolledWindow(child=self.view, vexpand=True)
+        sw = table_card(self.view)
         self.stack = Gtk.Stack()
         self.stack.add_named(sw, "list")
         self.empty = Adw.StatusPage(icon_name="view-grid-symbolic", title="No containers",
@@ -430,10 +438,10 @@ class ContainersPage(Gtk.Box):
         col("Name", NameCell, name_bind, expand=True)
         self.col_image = col("Image", lambda: TextCell(["monospace", "dim-label"]),
             lambda w, r, _t: (w.set_text(r.data.get("Image", "") if r.kind == "container" else ""),
-                              w.set_tooltip_text(r.data.get("Image") if r.kind == "container" else None)), width=170)
+                              w.set_tooltip_text(r.data.get("Image") if r.kind == "container" else None)), width=160)
         col("Status", lambda: TextCell(["dim-label"]),
-            lambda w, r, _t: w.set_text(short_status(r.data.get("Status", "")) if r.kind == "container" else ""), width=140)
-        self.col_ports = col("Ports", lambda: PortsCell(self.actions), lambda w, r, _t: w.update(r), width=124)
+            lambda w, r, _t: w.set_text(short_status(r.data.get("Status", "")) if r.kind == "container" else ""), width=132)
+        self.col_ports = col("Ports", lambda: PortsCell(self.actions), lambda w, r, _t: w.update(r), width=118)
 
         def stat_col(title, idx):
             def setup():
@@ -448,11 +456,11 @@ class ContainersPage(Gtk.Box):
                 connect_row(w, row, "stats", lambda r, w=w: self._stat_text(w, r, idx))
                 connect_row(w, row, "changed", lambda r, w=w: self._stat_text(w, r, idx))
             c = Gtk.ColumnViewColumn(title=title, factory=factory(setup, b, lambda w, *_: disconnect_rows(w)), resizable=True)
-            c.set_fixed_width(84 if idx == 1 else 96)
+            # no fixed width: the column follows the cells, which follow the font size
             self.view.append_column(c)
         stat_col("CPU", 1)
         stat_col("Memory", 2)
-        col("", lambda: ActionsCell(self), lambda w, r, _t: w.update(r), width=110)
+        col("", lambda: ActionsCell(self), lambda w, r, _t: w.update(r), width=124)
 
     def _stat_text(self, w, row, idx):
         s = self.store.sampler
@@ -678,9 +686,10 @@ class ContainerDetail(Adw.NavigationPage):
         self.insert_action_group("det", dag)
         for b in (self.btn_more, self.btn_delete, self.btn_port, self.btn_pause, self.btn_restart, self.btn_main, self.btn_edit):
             hb.pack_end(b)
+        tv.set_top_bar_style(Adw.ToolbarStyle.FLAT)
         tv.add_top_bar(hb)
         self.sub = label(css=["dim-label", "caption"], hexpand=True)
-        tabbar = Gtk.Box(spacing=12, margin_start=14, margin_end=14, margin_top=8, margin_bottom=6)
+        tabbar = Gtk.Box(spacing=12, css_classes=["explorer-bar"])
         tabbar.append(Adw.InlineViewSwitcher(stack=self.tabs, display_mode=Adw.InlineViewSwitcherDisplayMode.BOTH))
         tabbar.append(self.sub)
         self.sub.set_xalign(1.0)

@@ -1,51 +1,119 @@
-/* Berth — small additions on top of libadwaita (which handles light/dark and accent colours). */
-.dot { min-width: 8px; min-height: 8px; border-radius: 99px; background: alpha(currentColor, .35); }
-.dot.running { background: #2ec27e; box-shadow: 0 0 0 3px alpha(#2ec27e, .18); }
+/* Berth design system — sits on top of libadwaita (which owns colours, light/dark and the accent).
+ *
+ * Spacing follows an 8-point grid. Density (Settings → Accessibility) only changes the tokens below,
+ * so every page breathes the same way.                                                               */
+
+window {
+  --page-x: 24px;        /* left/right page margin            */
+  --page-y: 16px;        /* gap between page header and body   */
+  --row-y: 9px;          /* table row vertical padding          */
+  --cell-x: 10px;        /* table cell horizontal padding       */
+  --nav-row: 38px;       /* sidebar row height                  */
+  --card-pad: 18px;      /* inside cards / tiles                */
+  --gap: 16px;           /* between cards                       */
+}
+window.density-compact  { --page-x: 16px; --page-y: 10px; --row-y: 4px;  --cell-x: 8px;  --nav-row: 32px; --card-pad: 12px; --gap: 10px; }
+window.density-spacious { --page-x: 32px; --page-y: 22px; --row-y: 14px; --cell-x: 16px; --nav-row: 44px; --card-pad: 24px; --gap: 22px; }
+
+/* ── page frame ─────────────────────────────────────────────────────────── */
+.page-header { padding: 2px var(--page-x) 4px var(--page-x); min-height: 44px; }
+.page-title { font-size: 1.55em; font-weight: 750; letter-spacing: -0.01em; }
+.page-subtitle { font-size: 0.92em; opacity: 0.62; }
+.page-toolbar { padding: var(--page-y) var(--page-x) 10px var(--page-x); }
+.page-note { margin: 0 var(--page-x) 10px var(--page-x); }
+.page-toolbar searchentry { min-width: 280px; min-height: 34px; }
+
+/* tables live in a card instead of running edge to edge */
+.table-card {
+  margin: 0 var(--page-x) var(--page-x) var(--page-x);
+  border-radius: 12px;
+  background: alpha(currentColor, 0.025);
+  border: 1px solid alpha(currentColor, 0.09);
+}
+.table-card > scrolledwindow, .table-card columnview { background: none; }
+.berth-table > header { background: alpha(currentColor, 0.035); border-bottom: 1px solid alpha(currentColor, 0.08); }
+.berth-table > header > button {
+  padding: 9px var(--cell-x); font-size: 0.78em; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; opacity: 0.7;
+}
+.berth-table > listview > row > cell { padding: var(--row-y) var(--cell-x); }
+.berth-table > listview > row:hover { background: alpha(@accent_bg_color, 0.07); }
+.berth-table > listview > row { border-bottom: 1px solid alpha(currentColor, 0.05); }
+.heading-sm { font-weight: 650; }
+
+/* ── sidebar ─────────────────────────────────────────────────────────────── */
+.navigation-sidebar { padding: 6px 10px; }
+.navigation-sidebar > row { min-height: var(--nav-row); border-radius: 9px; margin: 1px 0; padding: 0 10px; }
+.navigation-sidebar > row:selected { background: alpha(@accent_bg_color, 0.16); }
+.navigation-sidebar > row:selected image { color: @accent_color; }
+.navigation-sidebar > row:selected label { font-weight: 650; }
+.sidebar-heading { font-size: 0.72em; font-weight: 750; letter-spacing: 0.09em; opacity: 0.5; }
+.engine-card { margin: 8px 12px 12px 12px; padding: 10px 12px; border-radius: 12px; background: alpha(currentColor, 0.05); }
+
+/* ── status dots, pills, ports ─────────────────────────────────────────────── */
+.dot { min-width: 9px; min-height: 9px; border-radius: 99px; background: alpha(currentColor, 0.35); }
+.dot.running { background: #2ec27e; box-shadow: 0 0 0 3px alpha(#2ec27e, 0.18); }
 .dot.paused, .dot.restarting, .dot.starting { background: #e5a50a; }
-.dot.unhealthy, .dot.dead { background: #e01b24; box-shadow: 0 0 0 3px alpha(#e01b24, .18); }
-.dot.group { min-width: 10px; min-height: 10px; border-radius: 3px; }
+.dot.unhealthy, .dot.dead { background: #e01b24; box-shadow: 0 0 0 3px alpha(#e01b24, 0.22); }
+.dot.group { min-width: 11px; min-height: 11px; border-radius: 3px; }
 .dot.group.running { box-shadow: none; }
 
-.heading-sm { font-weight: 600; }
-.berth-table > listview > row > cell { padding-top: 3px; padding-bottom: 3px; }
-.berth-table > header > button { font-size: 0.85em; font-weight: 600; }
-button.port { min-height: 22px; padding: 0 6px; font-family: monospace; font-size: 0.85em; border-radius: 6px;
-              border: 1px solid alpha(currentColor, .15); }
-.status-pill { font-size: 0.8em; font-weight: 600; padding: 1px 8px; border-radius: 99px; background: alpha(currentColor, .08); }
-.status-pill.ok { color: #26a269; background: alpha(#2ec27e, .14); }
-.status-pill.warn { color: #c88800; background: alpha(#e5a50a, .16); }
-.status-pill.muted { opacity: .7; }
+.status-pill { font-size: 0.8em; font-weight: 650; padding: 2px 9px; border-radius: 99px; background: alpha(currentColor, 0.08); }
+.status-pill.ok { color: #26a269; background: alpha(#2ec27e, 0.14); }
+.status-pill.warn { color: #c88800; background: alpha(#e5a50a, 0.16); }
+.status-pill.bad { color: #c01c28; background: alpha(#e01b24, 0.14); }
+.status-pill.muted { opacity: 0.7; }
 
-.statusbar { padding: 5px 14px; border-top: 1px solid alpha(currentColor, .1); background: alpha(currentColor, .03); }
-.statusbar .ok { color: #26a269; }
-.statusbar .bad { color: #c01c28; }
+button.port { min-height: 24px; padding: 0 8px; font-family: monospace; font-size: 0.85em; border-radius: 7px;
+              border: 1px solid alpha(currentColor, 0.15); }
 
-.card.tile { padding: 12px 14px; }
-.tile-k { letter-spacing: .06em; }
-.tile-v { font-size: 1.55em; font-weight: 600; font-family: monospace; }
-.card.chart-card { padding: 12px 14px; }
-.legend-chip, .legend-chip:checked { min-height: 20px; padding: 0 6px; font-size: 0.85em; font-weight: normal; background: none; box-shadow: none; }
-.legend-chip:hover { background: alpha(currentColor, .07); }
-.legend-chip:not(:checked) { opacity: .4; }
+/* ── cards, tiles, charts ─────────────────────────────────────────────────── */
+.card.tile { padding: var(--card-pad); }
+.tile-k { letter-spacing: 0.07em; font-weight: 650; }
+.tile-v { font-size: 1.75em; font-weight: 700; font-family: monospace; margin-top: 4px; }
+.card.chart-card { padding: var(--card-pad); }
+.legend-chip, .legend-chip:checked { min-height: 22px; padding: 0 7px; font-size: 0.85em; font-weight: normal; background: none; box-shadow: none; }
+.legend-chip:hover { background: alpha(currentColor, 0.07); }
+.legend-chip:not(:checked) { opacity: 0.4; }
+.level-chip { min-height: 28px; padding: 0 12px; font-weight: normal; }
+.level-chip:not(:checked) { opacity: 0.45; }
 flowboxchild { padding: 0; }
 .top-list { background: none; }
 .logview { font-size: 0.92em; }
-.monospace-title .title { font-family: monospace; font-size: 0.9em; }
 .exec-term { font-family: monospace; font-size: 10.5pt; }
-.status-pill.bad { color: #c01c28; background: alpha(#e01b24, .14); }
-.level-chip { min-height: 26px; padding: 0 10px; font-weight: normal; }
-.level-chip:not(:checked) { opacity: .45; }
-.success { color: #26a269; }
-.error { color: #c01c28; }
+.monospace-title .title { font-family: monospace; font-size: 0.9em; }
 
-/* ── layout rhythm: 6 / 12 / 18 px ── */
-.page-toolbar { padding: 6px 12px 8px 12px; border-bottom: 1px solid alpha(currentColor, .07); }
-.page-toolbar searchentry { min-width: 260px; }
-.sidebar-heading { font-size: 0.72em; font-weight: 700; letter-spacing: .08em; opacity: .55; }
-.navigation-sidebar > row { min-height: 34px; }
-.statusbar { padding: 4px 14px; min-height: 22px; }
-.statusbar-sep { opacity: .35; }
-.berth-table > header > button { padding-top: 6px; padding-bottom: 6px; }
-.berth-table > listview > row > cell { padding-left: 8px; padding-right: 8px; }
-.card.tile .tile-v { margin-top: 2px; }
-.statusbar-alert { color: #c01c28; font-weight: 600; font-size: 0.85em; min-height: 18px; padding: 0 8px; margin-left: 12px; }
+/* ── status bar ───────────────────────────────────────────────────────────── */
+.statusbar { padding: 6px var(--page-x); min-height: 24px; border-top: 1px solid alpha(currentColor, 0.08);
+             background: alpha(currentColor, 0.025); }
+.statusbar-sep { opacity: 0.3; }
+.statusbar .ok, .success { color: #26a269; }
+.statusbar .bad, .error { color: #c01c28; }
+.statusbar-alert { color: #c01c28; font-weight: 650; font-size: 0.85em; min-height: 20px; padding: 0 8px; margin-left: 12px; }
+
+/* ── accessibility: stronger borders and contrast ─────────────────────────── */
+window.strong-borders .table-card { border: 2px solid alpha(currentColor, 0.45); background: none; }
+window.strong-borders .berth-table > listview > row { border-bottom: 1px solid alpha(currentColor, 0.22); }
+window.strong-borders .berth-table > header { border-bottom: 2px solid alpha(currentColor, 0.4); }
+window.strong-borders .card { border: 2px solid alpha(currentColor, 0.4); box-shadow: none; }
+window.strong-borders button:not(.flat):not(.suggested-action):not(.destructive-action),
+window.strong-borders entry, window.strong-borders searchentry, window.strong-borders dropdown > button {
+  border: 1px solid alpha(currentColor, 0.55);
+}
+/* window controls keep their native look (specificity must beat the button rule above) */
+window.strong-borders windowcontrols > button:not(.flat):not(.suggested-action):not(.destructive-action) { border: none; }
+window.strong-borders .page-subtitle, window.strong-borders .dim-label, window.strong-borders .sidebar-heading { opacity: 0.9; }
+window.strong-borders :focus-visible { outline: 3px solid @accent_color; outline-offset: 2px; }
+window.strong-borders .navigation-sidebar > row:selected { background: alpha(@accent_bg_color, 0.3); }
+
+/* ── accessibility: larger icons ──────────────────────────────────────────── */
+window.large-icons .navigation-sidebar image, window.large-icons headerbar image,
+window.large-icons .page-header image, window.large-icons .page-toolbar image,
+window.large-icons .berth-table image { -gtk-icon-size: 22px; }
+
+/* ── page bodies that are not tables ──────────────────────────────────────── */
+.page-body { padding: var(--page-y) var(--page-x) var(--page-x) var(--page-x); }
+.explorer-bar { padding: 10px var(--page-x) 4px var(--page-x); }
+.explorer-bar.second { padding-top: 4px; padding-bottom: 8px; }
+.explorer-hist { margin: 0 var(--page-x) 6px var(--page-x); padding: 6px 4px; }
+.explorer-status { margin: 0 var(--page-x) 4px calc(var(--page-x) + 2px); }

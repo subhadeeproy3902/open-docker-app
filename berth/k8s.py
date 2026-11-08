@@ -8,7 +8,8 @@ import time
 from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
 from .cli import CommandDialog, run_capture
-from .util import Row, ago, bg, confirm, esc, factory, host, host_which, icon_button, label, open_uri, ordering, run_in_terminal
+from .util import (PageHeader, Row, ago, bg, confirm, esc, factory, flat_page, host, host_which, icon_button, label, open_uri,
+                   ordering, run_in_terminal, table_card, toolbar_row)
 
 KINDS = [("pods", "Pods"), ("deployments", "Deployments"), ("services", "Services"), ("nodes", "Nodes")]
 
@@ -64,21 +65,18 @@ class K8sPage(Gtk.Box):
         self.nav = Adw.NavigationView(vexpand=True)
         self.append(self.nav)
         tv = Adw.ToolbarView()
-        hb = Adw.HeaderBar()
-        self.wtitle = Adw.WindowTitle(title="Kubernetes")
-        hb.set_title_widget(self.wtitle)
+        self.wtitle = PageHeader("Kubernetes", "Pods, deployments, services and nodes of any cluster in your kubeconfig")
         self.ctx = Gtk.DropDown(model=Gtk.StringList(), tooltip_text="Cluster (kubeconfig context)")
         self.ctx.connect("notify::selected", lambda *_: self._ctx_changed())
         self.ns = Gtk.DropDown(model=Gtk.StringList.new(["All namespaces"]), tooltip_text="Namespace", enable_search=True)
         self.ns.connect("notify::selected", lambda *_: self.refresh())
-        hb.pack_start(self.ctx)
-        hb.pack_start(self.ns)
+
         menu = Gio.Menu()
         menu.append("Apply a YAML file…", "k8s.apply")
         menu.append("Create a local cluster (kind)…", "k8s.create")
         menu.append("Delete a local cluster (kind)…", "k8s.delete")
-        hb.pack_end(Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=menu, tooltip_text="Cluster actions"))
-        hb.pack_end(icon_button("view-refresh-symbolic", "Reload", self.refresh, css=()))
+        self.wtitle.add(icon_button("view-refresh-symbolic", "Reload", self.refresh, css=()))
+        self.wtitle.add(Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=menu, tooltip_text="Cluster actions"))
         ag = Gio.SimpleActionGroup()
         for n, fn in (("apply", self._apply_file), ("create", self._create_cluster), ("delete", self._delete_cluster)):
             a = Gio.SimpleAction.new(n, None)
@@ -92,8 +90,8 @@ class K8sPage(Gtk.Box):
             a.connect("activate", lambda _a, p, f=fn: f(p.get_string()))
             ag.add_action(a)
         self.insert_action_group("k8s", ag)
-        tv.add_top_bar(hb)
-        bar = Gtk.Box(spacing=8, margin_start=12, margin_end=12, margin_top=8, margin_bottom=6)
+        bar = toolbar_row(self.ctx, self.ns)
+        flat_page(tv, self.wtitle, bar)
         self.kinds = Adw.ToggleGroup()
         for k, lbl in KINDS:
             self.kinds.add(Adw.Toggle(name=k, label=lbl))
@@ -114,8 +112,7 @@ class K8sPage(Gtk.Box):
         self.view.set_model(Gtk.NoSelection(model=self.sorted))
         self.stack = Gtk.Stack(vexpand=True)
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        body.append(bar)
-        body.append(Gtk.ScrolledWindow(child=self.view, vexpand=True))
+        body.append(table_card(self.view))
         self.stack.add_named(body, "table")
         self.status = Adw.StatusPage(icon_name="network-server-symbolic")
         self.stack.add_named(self.status, "status")

@@ -12,7 +12,7 @@ from .files import FileBrowser, clone_volume, export_volume, import_volume, star
 from .scan import ScanDialog
 from .util import (Row, ago, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
                    fmt_rate, icon_button, label, labels, ordering, thread, detail_tag, push_detail,
-                   toolbar_row)
+                   toolbar_row, PageHeader, flat_page, table_card)
 
 
 def save_dialog(win, title, name, then):
@@ -74,15 +74,12 @@ class TablePage(Gtk.Box):
         self.nav = Adw.NavigationView(vexpand=True)
         self.append(self.nav)
         tv = Adw.ToolbarView()
-        hb = Adw.HeaderBar()
-        self.wtitle = Adw.WindowTitle(title=self.title)
-        hb.set_title_widget(self.wtitle)
+        self.wtitle = PageHeader(self.title)
         self.search = Gtk.SearchEntry(placeholder_text=f"Search {self.title.lower()}", width_chars=28)
         self.search.connect("search-changed", self._on_search)
-        for b in reversed(self.header_buttons()):
-            hb.pack_end(b)
-        tv.add_top_bar(hb)
-        tv.add_top_bar(toolbar_row(self.search, *self.toolbar_widgets()))
+        for b in self.header_buttons():
+            self.wtitle.add(b)
+        flat_page(tv, self.wtitle, toolbar_row(self.search, *self.toolbar_widgets()))
         self.model = Gio.ListStore(item_type=Row)
         self.filter = Gtk.CustomFilter.new(self._filter_fn, None)
         fm = Gtk.FilterListModel(model=self.model, filter=self.filter)
@@ -94,14 +91,14 @@ class TablePage(Gtk.Box):
         self.view.connect("activate", lambda _v, pos: self.on_activate(self.sorted.get_item(pos)))
         self.build_columns()
         self.stack = Gtk.Stack()
-        self.stack.add_named(Gtk.ScrolledWindow(child=self.view, vexpand=True), "list")
+        self.stack.add_named(table_card(self.view), "list")
         self.stack.add_named(Adw.StatusPage(title=self.empty_text[0], description=self.empty_text[1],
                                             icon_name=self.icon), "empty")
         sp = Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, width_request=32, height_request=32)
         self.stack.add_named(sp, "loading")
         self.stack.set_visible_child_name("loading")
         top = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.note = label("", css=["dim-label", "caption"], margin_start=12, margin_end=12, margin_top=8, margin_bottom=4, wrap=True)
+        self.note = label("", css=["dim-label", "caption", "page-note"], wrap=True)
         self.note.set_visible(False)
         top.append(self.note)
         top.append(self.stack)
@@ -1154,16 +1151,15 @@ class ResourcesPage(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.win, self.store, self.settings = win, store, settings
         tv = Adw.ToolbarView(vexpand=True)
-        hb = Adw.HeaderBar()
-        hb.set_title_widget(Adw.WindowTitle(title="Resource usage", subtitle="Live, from the kernel's per-container counters"))
+        self.header = PageHeader("Resource usage", "Live CPU, memory, network and disk — read only while this page is open")
         self.range = Adw.ToggleGroup()
         for name, lbl in (("60", "1 min"), ("300", "5 min"), ("600", "10 min"), ("1800", "30 min")):
             self.range.add(Adw.Toggle(name=name, label=lbl))
         self.range.set_active_name(str(settings["range"] or 600))
         self.range.connect("notify::active-name", lambda *_: (self.settings.__setitem__("range", int(self.range.get_active_name())), self.update(force=True)))
-        hb.pack_end(self.range)
-        tv.add_top_bar(hb)
-        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_start=16, margin_end=16, margin_top=12, margin_bottom=16)
+        self.header.add(self.range)
+        flat_page(tv, self.header)
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, css_classes=["page-body"])
         tiles = Gtk.Box(spacing=12, homogeneous=True)
         self.tiles = {}
         for key, title in (("cpu", "CPU · containers"), ("mem", "Memory · containers"), ("net", "Network"), ("io", "Disk I/O")):
@@ -1300,10 +1296,9 @@ class DiskPage(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.win, self.store = win, store
         tv = Adw.ToolbarView(vexpand=True)
-        hb = Adw.HeaderBar()
-        hb.set_title_widget(Adw.WindowTitle(title="Disk usage"))
-        hb.pack_end(icon_button("view-refresh-symbolic", "Measure again", self.on_show, css=()))
-        tv.add_top_bar(hb)
+        header = PageHeader("Disk usage", "Where Docker keeps its data, and what you can safely reclaim")
+        header.add(Gtk.Button(label="Measure again", tooltip_text="Ask Docker for fresh sizes")).connect("clicked", lambda *_: self.on_show())
+        flat_page(tv, header)
         self.pp = Adw.PreferencesPage()
         self.fs_group = Adw.PreferencesGroup(title="Where Docker keeps its data")
         self.pp.add(self.fs_group)

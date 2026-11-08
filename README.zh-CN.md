@@ -76,7 +76,7 @@ Docker Desktop 控制面板的日常功能它都有 —— 却没有虚拟机、
 | <img src="docs/screenshots/logs-explorer-dark.png" alt="日志浏览器"> **日志浏览器**：按级别着色的直方图、拖动缩放时间、实时 / 5 分钟 … 7 天、级别过滤与计数、正则搜索。 | <img src="docs/screenshots/resource-usage-dark.png" alt="资源使用"> **资源使用**：按 Compose 项目显示实时 CPU 与内存、总量、最占资源的容器。 |
 | <img src="docs/screenshots/files-editor-light.png" alt="文件编辑"> **文件**：浏览、查看并**编辑**运行中容器和数据卷里的文件；上传、下载、重命名、删除。 | <img src="docs/screenshots/images-dark.png" alt="镜像"> **镜像**：Docker Hub 搜索与拉取、带端口/环境变量运行、漏洞扫描、打标签、推送、保存 / 加载。 |
 
-另外还有：按 Compose 分组的容器管理、Exec 内置终端（VTE）、容器编辑（安全重建）、Compose 运行/编辑、数据卷导出导入克隆、网络连接与断开、构建历史与构建缓存、磁盘占用、Kubernetes（Pod / Deployment / Service / Node、编辑 YAML、kind 本地集群）、引擎切换（Docker / rootless / Podman / context / tcp）、镜像仓库登录、可选托盘图标、浅色 / 深色主题。
+另外还有：按 Compose 分组的容器管理、Exec 内置终端（VTE）、容器编辑（安全重建）、Compose 运行/编辑、数据卷导出导入克隆、网络连接与断开、构建历史与构建缓存、磁盘占用、Kubernetes（Pod / Deployment / Service / Node、编辑 YAML、kind 本地集群）、引擎切换（Docker / rootless / Podman / context / tcp）、镜像仓库登录、可选托盘图标、浅色 / 深色主题，以及无障碍设置（文字大小 85–150 %、紧凑 / 舒适 / 宽松密度、更清晰的边框与对比度、更大的图标、减少动画）。
 
 ## 安装
 
@@ -103,6 +103,8 @@ flatpak install --user berth.flatpak
 
 ### macOS
 
+> 详细步骤：**[docs/INSTALL-macOS.md](docs/INSTALL-macOS.md)**（无需 Apple 账号，也无需付费）。
+
 从 [最新发布](https://github.com/subhadeeproy3902/open-docker-app/releases/latest) 下载 **`Berth-macos-arm64.dmg`**，拖入「应用程序」。应用尚未公证，首次运行前执行：
 
 ```sh
@@ -112,6 +114,8 @@ xattr -dr com.apple.quarantine /Applications/Berth.app
 Mac 上需要一个 Docker 引擎：**Colima**（`brew install colima docker && colima start`）、OrbStack、Rancher Desktop 或 Docker Desktop，Berth 会自动找到它们的 socket。
 
 ### Windows
+
+> 详细步骤：**[docs/INSTALL-Windows.md](docs/INSTALL-Windows.md)**（无需代码签名证书）。
 
 从 [最新发布](https://github.com/subhadeeproy3902/open-docker-app/releases/latest) 下载 **`Berth-windows-x64.zip`**，解压后运行 `Berth.exe`，通过 TCP 连接引擎（Docker Desktop：*Settings → General → Expose daemon on tcp://localhost:2375*）。目前最顺畅的方式是在 **WSL 2** 里运行 Linux 版（WSLg 会显示窗口）。
 

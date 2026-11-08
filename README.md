@@ -108,7 +108,7 @@ arrives; there are no animations or timers while idle. A *Software rendering* sw
 |---|---|
 | <img src="docs/screenshots/logs-explorer-dark.png" alt="Log explorer"> **Log explorer** — Loki/Grafana-style histogram coloured by level, drag to zoom, Live / 5 min … 7 days, level filters with counts, regex search, per-container colours. | <img src="docs/screenshots/resource-usage-dark.png" alt="Resource usage"> **Resource usage** — live CPU and memory per Compose project (1–30 min), totals, heaviest containers with sparklines. |
 | <img src="docs/screenshots/files-editor-light.png" alt="File editor"> **Files** — browse, view and **edit** files in running containers and in volumes; upload, download, rename, delete. | <img src="docs/screenshots/container-stats-dark.png" alt="Container stats"> **Per-container stats** — CPU, memory, network and disk graphs with hover values. |
-| <img src="docs/screenshots/images-dark.png" alt="Images"> **Images** — in use / unused / dangling, Docker Hub search & pull with progress, run with ports/env/volumes, vulnerability scan, tag, push, save / load. | <img src="docs/screenshots/settings-light.png" alt="Settings"> **Settings** — light / dark / system theme, resource saver, engine switcher, registry sign-in, `daemon.json` editor, optional tray icon. |
+| <img src="docs/screenshots/images-dark.png" alt="Images"> **Images** — in use / unused / dangling, Docker Hub search & pull with progress, run with ports/env/volumes, vulnerability scan, tag, push, save / load. | <img src="docs/screenshots/settings-light.png" alt="Settings"> **Settings** — light / dark / system theme, **accessibility** (text size 85–150 %, compact / comfortable / spacious density, stronger borders and contrast, larger icons, reduce motion), resource saver, engine switcher, registry sign-in, `daemon.json` editor, optional tray icon. |
 
 **Everything else**
 
@@ -162,6 +162,8 @@ Your user needs access to the Docker socket: `sudo usermod -aG docker $USER` (lo
 
 ### macOS
 
+> Full step-by-step guide: **[docs/INSTALL-macOS.md](docs/INSTALL-macOS.md)** (no Apple account or payment needed).
+
 Download **`Berth-macos-arm64.dmg`** from the [latest release](https://github.com/subhadeeproy3902/open-docker-app/releases/latest),
 drag Berth into Applications. The app is not notarized yet, so the first time run:
 
@@ -174,6 +176,8 @@ Docker Desktop. It finds their sockets automatically. From source instead: `brew
 then `python3 -m berth` in a clone.
 
 ### Windows
+
+> Full step-by-step guide: **[docs/INSTALL-Windows.md](docs/INSTALL-Windows.md)** (no certificate needed).
 
 Download **`Berth-windows-x64.zip`** from the [latest release](https://github.com/subhadeeproy3902/open-docker-app/releases/latest),
 unzip, run `Berth.exe`. Connect it to an engine over TCP:

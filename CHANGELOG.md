@@ -3,6 +3,34 @@
 All notable changes to Berth are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.1.0] - 2026-11-08
+
+### Changed — a redesigned interface
+- Every page now has the same frame: a large title with a live subtitle ("6 running · 8 total"), actions on the right,
+  a toolbar row underneath, and tables inside a rounded card instead of running edge to edge.
+- One spacing system (8-point grid) drives page margins, row height, cell padding and card padding everywhere.
+- Sidebar grouped into Manage / Observe / Build / Orchestrate, with an engine card at the bottom; a status bar with
+  engine state, CPU, RAM and free disk.
+- Table headers are quieter (small caps); live CPU / memory numbers use monospaced digits and size themselves from the
+  font, so they never clip at any text size.
+- Logs explorer, Resource usage and Disk usage aligned to the same margins.
+
+### Added — Settings → Accessibility
+- **Text size** 85 / 100 / 115 / 130 / 150 % (scales every label, table and chart; independent of the desktop setting).
+- **Density**: compact, comfortable, spacious.
+- **Stronger borders and contrast**: clear outlines on cards, tables, buttons and inputs, a thick focus ring, less dimmed text.
+- **Larger icons** in the sidebar, toolbars and tables.
+- **Reduce motion**: turns off sliding and fading animations.
+- All apply instantly, without a restart.
+
+### Docs
+- Step-by-step install guides: [docs/INSTALL-macOS.md](docs/INSTALL-macOS.md) and
+  [docs/INSTALL-Windows.md](docs/INSTALL-Windows.md) (no Apple account, payment or certificate needed).
+- New screenshots.
+
+### Fixed
+- macOS: the app is now ad-hoc signed in CI, which avoids the "Berth is damaged" message on Apple Silicon.
+
 ## [1.0.1] - 2026-11-08
 
 ### Fixed

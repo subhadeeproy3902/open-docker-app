@@ -44,6 +44,24 @@ def scenario(app):
         for tab in ("logs", "inspect", "files", "stats"):
             det.tabs.set_visible_child_name(tab); yield 4 if tab == "stats" else 3
             yield from grab(win, f"container-{tab}")
+    web = [c for c in win.store.containers if c.get("State") == "running" and "web" in c["Names"][0]]
+    if web:                                      # the file editor with a real config file open
+        from berth.files import FileBrowser
+        cp.nav.pop_to_tag(cp.nav.get_navigation_stack().get_item(0).get_tag()) if cp.nav.get_navigation_stack().get_n_items() > 1 else None
+        cp.open_detail(web[0]["Id"]); yield 2
+        det = cp.nav.get_visible_page()
+        det.tabs.set_visible_child_name("files"); yield 3
+        fb, todo = None, [det]
+        while todo and not fb:
+            w = todo.pop()
+            fb = w if isinstance(w, FileBrowser) else None
+            ch = w.get_first_child()
+            while ch:
+                todo.append(ch); ch = ch.get_next_sibling()
+        if fb:
+            fb.load("/etc/nginx/conf.d"); yield 2
+            fb._open(("/etc/nginx/conf.d/default.conf", False, 1200, "644")); yield 2
+            yield from grab(win, "container-file-editor")
     app.quit()
 
 

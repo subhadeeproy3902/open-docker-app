@@ -1152,15 +1152,17 @@ class ResourcesPage(Gtk.Box):
         self.win, self.store, self.settings = win, store, settings
         tv = Adw.ToolbarView(vexpand=True)
         self.header = PageHeader("Resource usage", "Live CPU, memory, network and disk — read only while this page is open")
-        self.range = Adw.ToggleGroup()
+        self.range = Adw.ToggleGroup(can_shrink=False)
         for name, lbl in (("60", "1 min"), ("300", "5 min"), ("600", "10 min"), ("1800", "30 min")):
             self.range.add(Adw.Toggle(name=name, label=lbl))
         self.range.set_active_name(str(settings["range"] or 600))
         self.range.connect("notify::active-name", lambda *_: (self.settings.__setitem__("range", int(self.range.get_active_name())), self.update(force=True)))
-        self.header.add(self.range)
-        flat_page(tv, self.header)
+        flat_page(tv, self.header, toolbar_row(label("Show the last", css=["dim-label"], valign=Gtk.Align.CENTER), self.range))
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, css_classes=["page-body"])
-        tiles = Gtk.Box(spacing=12, homogeneous=True)
+        # 4 tiles side by side; the window's breakpoint switches this to 2 × 2 on narrow windows (never 3 + 1)
+        tiles = Gtk.FlowBox(homogeneous=True, min_children_per_line=4, max_children_per_line=4, column_spacing=12,
+                            row_spacing=12, selection_mode=Gtk.SelectionMode.NONE)
+        self.tiles_box = tiles
         self.tiles = {}
         for key, title in (("cpu", "CPU · containers"), ("mem", "Memory · containers"), ("net", "Network"), ("io", "Disk I/O")):
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, css_classes=["card", "tile"])
@@ -1176,7 +1178,8 @@ class ResourcesPage(Gtk.Box):
             self.tiles[key] = (v, s)
             tiles.append(card)
         body.append(tiles)
-        row = Gtk.Box(spacing=12, homogeneous=True)
+        row = Gtk.FlowBox(homogeneous=True, min_children_per_line=1, max_children_per_line=2, column_spacing=12,
+                          row_spacing=12, selection_mode=Gtk.SelectionMode.NONE)
         self.ch_cpu = charts.LineChart(lambda v: fmt_pct(v), 200)
         self.ch_mem = charts.LineChart(fmt_bytes, 200, binary=True)
         self.legends = {}

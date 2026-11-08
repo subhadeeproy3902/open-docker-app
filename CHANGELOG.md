@@ -3,6 +3,23 @@
 All notable changes to Berth are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.1] - 2026-11-09
+
+### Fixed
+- **Older GTK (Debian 13, MX Linux 25, Ubuntu 25.04, GNOME 48 Flatpak):** "The old GL renderer has been removed" and a
+  slow start. GTK 4.14–4.19 call the fast renderer `ngl`; 4.20+ call it `gl`. Berth now picks the right name.
+- **Overlapping or cut-off layout on small windows and large fonts** (reported on MX Linux):
+  - the welcome footer: the button could cover the step dots;
+  - every page was as wide as the widest page (Logs, 764 px with DejaVu Sans 11), so narrow windows cut the right side off;
+  - toolbars now wrap onto a second line instead of overflowing (Containers, Images, Volumes, Logs, Kubernetes …);
+  - time-range and filter buttons no longer squeeze their labels into "1…";
+  - Resource usage: tiles switch between 4 across and 2 × 2, charts stack, the time range moved to the toolbar row;
+  - the Logs histogram shrinks on short windows; welcome steps scroll so Back / Continue stay visible.
+  Checked at the minimum window size (760 × 520) with DejaVu Sans 11 at 115 % text.
+
+> The `Theme parser error: gtk.css:8625 … Expected a valid color` warnings some people see come from their desktop
+> theme's own `gtk.css`, not from Berth. They are harmless.
+
 ## [1.2.0] - 2026-11-08
 
 ### Added

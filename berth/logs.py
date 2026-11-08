@@ -69,8 +69,12 @@ def entry(src, line):
 class Histogram(Gtk.DrawingArea):
     """Stacked bars of log lines per time bucket. Drag across it to zoom into that span."""
 
+    def do_measure(self, orientation, for_size):
+        # 96 px tall when there is room, down to 56 px on short windows (so the page still fits at 520 px)
+        return (56, 96, -1, -1) if orientation == Gtk.Orientation.VERTICAL else (120, 600, -1, -1)
+
     def __init__(self, on_zoom):
-        super().__init__(content_height=96, hexpand=True)
+        super().__init__(hexpand=True)
         self.on_zoom = on_zoom
         self.entries, self.t0, self.t1, self.nb = [], 0, 1, 80
         self.buckets, self.sel = [], None
@@ -198,10 +202,10 @@ class LogsExplorer(Gtk.Box):
         self._ttys = {}
         self._idle_ticks = 0
 
-        bar = Gtk.Box(spacing=8, css_classes=["explorer-bar"])
+        bar = Adw.WrapBox(child_spacing=8, line_spacing=8, css_classes=["explorer-bar"])   # wraps when narrow
         if picker:
             bar.append(picker)
-        self.range = Adw.ToggleGroup()
+        self.range = Adw.ToggleGroup(can_shrink=False)
         for name, lbl, _s in RANGES:
             self.range.add(Adw.Toggle(name=name, label=lbl))
         self.range.set_active_name("900")
@@ -217,7 +221,7 @@ class LogsExplorer(Gtk.Box):
         bar.append(self.regex)
         self.append(bar)
 
-        bar2 = Gtk.Box(spacing=6, css_classes=["explorer-bar", "second"])
+        bar2 = Adw.WrapBox(child_spacing=6, line_spacing=6, css_classes=["explorer-bar", "second"])
         self.chips = {}
         for lv in reversed(LEVELS):
             b = Gtk.ToggleButton(active=True)

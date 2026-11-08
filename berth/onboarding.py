@@ -73,19 +73,22 @@ class Onboarding(Adw.Dialog):
         tv.add_top_bar(hb)
         self.carousel = Adw.Carousel(interactive=False, allow_scroll_wheel=False, vexpand=True)
         for page in (self._welcome(), self._engine(), self._appearance(), self._ready()):
-            self.carousel.append(page)
+            # scrolls on short windows, so Back / Continue at the bottom always stay visible
+            self.carousel.append(Gtk.ScrolledWindow(child=page, hscrollbar_policy=Gtk.PolicyType.NEVER, hexpand=True,
+                                                    propagate_natural_height=True))
         self.carousel.connect("page-changed", lambda *_: self._sync())
         tv.set_content(self.carousel)
-        foot = Gtk.CenterBox(css_classes=["onb-footer"])
+        # Buttons at the sides, dots in whatever space is left: never overlaps, whatever the label or font size.
+        foot = Gtk.Box(spacing=12, css_classes=["onb-footer"])
         self.back = Gtk.Button(label="Back")
         self.back.connect("clicked", lambda *_: self._go(-1))
         self.next = Gtk.Button(label="Get started")
         self.next.add_css_class("suggested-action")
         self.next.add_css_class("pill")
         self.next.connect("clicked", lambda *_: self._go(1))
-        foot.set_start_widget(self.back)
-        foot.set_center_widget(Adw.CarouselIndicatorDots(carousel=self.carousel))
-        foot.set_end_widget(self.next)
+        foot.append(self.back)
+        foot.append(Adw.CarouselIndicatorDots(carousel=self.carousel, hexpand=True, halign=Gtk.Align.CENTER))
+        foot.append(self.next)
         tv.add_bottom_bar(foot)
         self.set_child(tv)
         self.connect("closed", lambda *_: self._closed())
@@ -120,7 +123,7 @@ class Onboarding(Adw.Dialog):
     def _appearance(self):
         page = _step(None, "Make it yours", "You can change all of this later in Settings.")
         g = Adw.PreferencesGroup(css_classes=["onb-wide"])
-        th = Adw.ToggleGroup(css_classes=["round"], valign=Gtk.Align.CENTER)
+        th = Adw.ToggleGroup(can_shrink=False, css_classes=["round"], valign=Gtk.Align.CENTER)
         for key, name in (("system", "System"), ("light", "Light"), ("dark", "Dark")):
             th.add(Adw.Toggle(name=key, label=name))
         th.set_active_name(self.s["theme"] or "system")
@@ -135,7 +138,7 @@ class Onboarding(Adw.Dialog):
         ts.connect("notify::selected", lambda r, _p: self._a11y("text_scale", sizes[r.get_selected()]))
         g.add(ts)
         dens = ["compact", "comfortable", "spacious"]
-        dn = Adw.ToggleGroup(css_classes=["round"], valign=Gtk.Align.CENTER)
+        dn = Adw.ToggleGroup(can_shrink=False, css_classes=["round"], valign=Gtk.Align.CENTER)
         for d in dens:
             dn.add(Adw.Toggle(name=d, label=d.capitalize()))
         dn.set_active_name(self.s["density"] if self.s["density"] in dens else "comfortable")
@@ -341,7 +344,8 @@ class Onboarding(Adw.Dialog):
     def _sync(self):
         i = int(round(self.carousel.get_position()))
         last = i == self.carousel.get_n_pages() - 1
-        self.back.set_visible(i > 0)
+        self.back.set_opacity(1 if i > 0 else 0)          # keep its space so the dots never jump
+        self.back.set_sensitive(i > 0)
         self.skip.set_visible(not last)
         up = self.store.up is True
         if i == 0:

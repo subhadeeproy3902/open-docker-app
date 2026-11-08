@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
 APP_ID = "io.github.subhadeeproy3902.Berth"
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 ICON = os.environ.get("BERTH_ICON") or APP_ID     # icon name; `make install ICON=docker-desktop` swaps it
 
 
@@ -348,11 +348,12 @@ def table_card(child):
 
 
 def toolbar_row(*widgets):
-    """The row under a page's header: search first, then filters. Same spacing on every page."""
-    row = Gtk.Box(spacing=8, css_classes=["page-toolbar"])
+    """The row under a page's header: search first, then filters. Same spacing on every page.
+    It wraps onto a second line when the window is narrow or the font is large, instead of overflowing."""
+    row = Adw.WrapBox(child_spacing=8, line_spacing=8, css_classes=["page-toolbar"])
     for w in widgets:
-        if w is not None:
-            row.append(w)
+        if w is not None and not (isinstance(w, Gtk.Box) and w.get_first_child() is None and w.get_hexpand()):
+            row.append(w)                 # (empty hexpand spacers mean nothing in a wrapping row)
     return row
 
 

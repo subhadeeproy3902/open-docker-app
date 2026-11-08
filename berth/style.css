@@ -21,7 +21,8 @@ window.density-spacious { --page-x: 32px; --page-y: 22px; --row-y: 14px; --cell-
 .page-subtitle { font-size: 0.92em; opacity: 0.62; }
 .page-toolbar { padding: var(--page-y) var(--page-x) 10px var(--page-x); }
 .page-note { margin: 0 var(--page-x) 10px var(--page-x); }
-.page-toolbar searchentry { min-width: 280px; min-height: 34px; }
+.page-toolbar searchentry { min-width: 240px; min-height: 34px; }
+.explorer-bar searchentry { min-width: 220px; }
 
 /* tables live in a card instead of running edge to edge */
 .table-card {
@@ -68,7 +69,8 @@ button.port { min-height: 24px; padding: 0 8px; font-family: monospace; font-siz
               border: 1px solid alpha(currentColor, 0.15); }
 
 /* ── cards, tiles, charts ─────────────────────────────────────────────────── */
-.card.tile { padding: var(--card-pad); }
+.card.tile { padding: var(--card-pad); min-width: 150px; }
+.card.chart-card { min-width: 260px; }
 .tile-k { letter-spacing: 0.07em; font-weight: 650; }
 .tile-v { font-size: 1.75em; font-weight: 700; font-family: monospace; margin-top: 4px; }
 .card.chart-card { padding: var(--card-pad); }
@@ -113,6 +115,7 @@ window.large-icons .berth-table image { -gtk-icon-size: 22px; }
 
 /* ── page bodies that are not tables ──────────────────────────────────────── */
 .page-body { padding: var(--page-y) var(--page-x) var(--page-x) var(--page-x); }
+.page-toolbar + .page-body, .page-body.after-toolbar { padding-top: 4px; }
 .explorer-bar { padding: 10px var(--page-x) 4px var(--page-x); }
 .explorer-bar.second { padding-top: 4px; padding-bottom: 8px; }
 .explorer-hist { margin: 0 var(--page-x) 6px var(--page-x); padding: 6px 4px; }

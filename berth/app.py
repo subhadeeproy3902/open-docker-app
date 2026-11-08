@@ -2,15 +2,18 @@
 import os
 import sys
 
-# Draw with OpenGL, not GTK's default Vulkan: creating a Vulkan instance loads every GPU driver, which takes ~2 s and
-# wakes a sleeping discrete GPU on hybrid laptops (measured: GL 80 ms, Vulkan 2065 ms). Anyone can still override it.
-os.environ.setdefault("GSK_RENDERER", "gl")
-
 import gi  # noqa: E402
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, Gdk, Gio, GLib, Graphene, Gsk, Gtk  # noqa: E402
+
+# Draw with OpenGL, not GTK's default Vulkan: creating a Vulkan instance loads every GPU driver, which takes ~2 s and
+# wakes a sleeping discrete GPU on hybrid laptops (measured: GL 80 ms, Vulkan 2065 ms). The renderer is only picked
+# when the first window is realized, so setting it here (after importing, before any window) is in time.
+# Its name changed: GTK 4.14–4.19 call it "ngl" ("gl" was the old, removed one); 4.20+ call it "gl". Anyone can override.
+if "GSK_RENDERER" not in os.environ and Gtk.get_major_version() == 4 and Gtk.get_minor_version() >= 14:
+    os.environ["GSK_RENDERER"] = "gl" if Gtk.get_minor_version() >= 20 else "ngl"
 
 from .containers import ContainersPage  # noqa: E402
 from . import theme  # noqa: E402
@@ -94,7 +97,9 @@ class Window(Adw.ApplicationWindow):
         split.set_sidebar(Adw.NavigationPage(title="Berth", child=side))
 
         # content
-        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.NONE, vexpand=True)
+        # Not homogeneous: each page is only as wide as itself, so one wide page can't push the others out of the window.
+        self.stack = Gtk.Stack(transition_type=Gtk.StackTransitionType.NONE, vexpand=True,
+                               hhomogeneous=False, vhomogeneous=False)
         self.pages = {}
         for key, cls in PAGES:
             p = cls(self, self.store, settings)
@@ -131,7 +136,9 @@ class Window(Adw.ApplicationWindow):
         for col in (self.pages["containers"].col_image, self.pages["containers"].col_ports,
                     self.pages["images"].col_id, self.pages["images"].c_created):
             bp.add_setter(col, "visible", False)
-        self.add_breakpoint(bp)
+        for prop in ("min-children-per-line", "max-children-per-line"):   # resource tiles: 4 across → 2 × 2
+            bp.add_setter(self.pages["resources"].tiles_box, prop, 2)
+        self.add_breakpoint(bp)     # one breakpoint only: libadwaita applies just the last matching one
         self.set_size_request(760, 520)
         apply_accessibility(self, settings)
         self.page = settings["page"] if settings["page"] in self.pages else "containers"

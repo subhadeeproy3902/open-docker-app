@@ -92,7 +92,7 @@ class K8sPage(Gtk.Box):
         self.insert_action_group("k8s", ag)
         bar = toolbar_row(self.ctx, self.ns)
         flat_page(tv, self.wtitle, bar)
-        self.kinds = Adw.ToggleGroup()
+        self.kinds = Adw.ToggleGroup(can_shrink=False)
         for k, lbl in KINDS:
             self.kinds.add(Adw.Toggle(name=k, label=lbl))
         self.kinds.set_active_name("pods")

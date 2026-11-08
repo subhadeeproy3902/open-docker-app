@@ -366,7 +366,7 @@ class ContainersPage(Gtk.Box):
         self.wtitle = PageHeader("Containers")
         self.search = Gtk.SearchEntry(placeholder_text="Search containers", width_chars=28)
         self.search.connect("search-changed", self._on_search)
-        run = Adw.ToggleGroup(tooltip_text="Show containers by state")
+        run = Adw.ToggleGroup(can_shrink=False, tooltip_text="Show containers by state")
         self.filter_toggles = {}
         for key, lbl in (("all", "All"), ("running", "Running"), ("unhealthy", "Unhealthy"), ("stopped", "Stopped")):
             t = Adw.Toggle(name=key, label=lbl)

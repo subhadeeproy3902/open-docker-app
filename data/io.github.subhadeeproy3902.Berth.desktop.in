@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=Berth
+GenericName=Docker Desktop
+Comment=Containers, images, volumes, logs and live stats for Docker — light and native
+Exec=@BINDIR@/berth
+Icon=@ICON@
+Terminal=false
+Categories=Development;System;Monitor;GTK;
+Keywords=docker;container;containers;image;compose;volume;logs;podman;
+StartupNotify=true
+StartupWMClass=io.github.subhadeeproy3902.Berth

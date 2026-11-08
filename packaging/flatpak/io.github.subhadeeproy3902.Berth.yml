@@ -1,0 +1,28 @@
+# Flatpak build: works on every Linux distro (brings GTK 4 + libadwaita through the GNOME runtime).
+#   flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.subhadeeproy3902.Berth.yml
+id: io.github.subhadeeproy3902.Berth
+runtime: org.gnome.Platform
+runtime-version: '48'
+sdk: org.gnome.Sdk
+command: berth
+finish-args:
+  - --share=ipc
+  - --share=network                 # remote tcp:// engines, Docker Hub search
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --filesystem=/run/docker.sock   # the Docker Engine
+  - --filesystem=xdg-run/docker.sock  # rootless Docker
+  - --filesystem=xdg-run/podman     # Podman's Docker-compatible socket
+  - --filesystem=home               # compose files, uploads/downloads, export/import
+  - --talk-name=org.freedesktop.Flatpak   # run docker / kubectl / kind / pkexec on the host (flatpak-spawn --host)
+  - --talk-name=org.kde.StatusNotifierWatcher  # optional tray icon
+modules:
+  - name: berth
+    buildsystem: simple
+    build-commands:
+      - make install PREFIX=/app ICON=io.github.subhadeeproy3902.Berth
+    sources:
+      - type: dir
+        path: ../..
+        skip: [".git", "build-dir", ".flatpak-builder", "dist"]

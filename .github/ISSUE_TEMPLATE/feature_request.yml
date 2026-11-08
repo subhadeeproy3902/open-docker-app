@@ -1,0 +1,19 @@
+name: ✨ Feature request
+description: Suggest an idea for Berth
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem would this solve?
+      description: Describe the situation and what you're trying to do.
+    validations: { required: true }
+  - type: textarea
+    id: idea
+    attributes: { label: Your idea, description: How could Berth help? Mock-ups welcome. }
+  - type: checkboxes
+    id: light
+    attributes:
+      label: Staying light
+      options:
+        - label: I understand Berth aims to stay small (no heavy dependencies, no background work while idle).

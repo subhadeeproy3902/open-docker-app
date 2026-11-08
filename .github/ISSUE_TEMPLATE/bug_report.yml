@@ -1,0 +1,33 @@
+name: 🐞 Bug report
+description: Something doesn't work as expected
+labels: [bug]
+body:
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, what happened instead? Screenshots help a lot.
+    validations: { required: true }
+  - type: input
+    id: version
+    attributes: { label: Berth version, description: "From Settings → About, or `berth --version`", placeholder: "1.0.0" }
+    validations: { required: true }
+  - type: dropdown
+    id: install
+    attributes:
+      label: How did you install Berth?
+      options: [install.sh, Flatpak, Arch PKGBUILD, From source, macOS .dmg, Windows .zip, Other]
+    validations: { required: true }
+  - type: input
+    id: os
+    attributes: { label: Operating system, placeholder: "Fedora 45 GNOME / Ubuntu 24.04 / macOS 15 / Windows 11" }
+    validations: { required: true }
+  - type: input
+    id: engine
+    attributes: { label: Engine, placeholder: "Docker 29.x / rootless Docker / Podman 5 / Colima / remote tcp" }
+  - type: textarea
+    id: logs
+    attributes:
+      label: Terminal output
+      description: Run `berth` from a terminal and paste any error output.
+      render: text

@@ -1,0 +1,7 @@
+services:
+  site:
+    image: nginx:alpine
+    ports: ["8081:80"]
+  search:
+    image: busybox:latest
+    command: ["sh", "-c", "while true; do echo \"INFO indexed $$RANDOM posts\"; sleep 3; done"]

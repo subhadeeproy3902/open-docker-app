@@ -1,0 +1,144 @@
+name: Build
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Lint & syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
+      - name: Python syntax
+        run: python -m py_compile berth/*.py tests/*.py tools/*.py packaging/pyinstaller/launcher.py
+      - name: Ruff (errors only)
+        run: pip install ruff && ruff check --select E9,F63,F7,F82 berth tests tools
+      - name: Shell scripts
+        run: shellcheck -S warning scripts/install.sh tools/demo/up.sh tools/demo/down.sh
+      - name: Desktop + AppStream metadata
+        run: |
+          sudo apt-get install -y -qq desktop-file-utils appstream >/dev/null
+          sed 's|@BINDIR@|/usr/bin|; s|@ICON@|io.github.subhadeeproy3902.Berth|' data/io.github.subhadeeproy3902.Berth.desktop.in > /tmp/berth.desktop
+          desktop-file-validate /tmp/berth.desktop
+          appstreamcli validate --no-net --pedantic data/io.github.subhadeeproy3902.Berth.metainfo.xml || appstreamcli validate --no-net data/io.github.subhadeeproy3902.Berth.metainfo.xml
+
+  linux-tarball:
+    name: Linux tarball
+    needs: check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make dist
+      - uses: actions/upload-artifact@v4
+        with: { name: berth-linux, path: dist/berth-linux.tar.gz }
+
+  flatpak:
+    name: Flatpak (any Linux)
+    needs: check
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:gnome-48
+      options: --privileged
+    steps:
+      - uses: actions/checkout@v4
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: berth.flatpak
+          manifest-path: packaging/flatpak/io.github.subhadeeproy3902.Berth.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+          upload-artifact: true
+
+  macos:
+    name: macOS app (Apple Silicon)
+    needs: check
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: GTK 4 + libadwaita + PyGObject (Homebrew)
+        run: brew install gtk4 libadwaita pygobject3 adwaita-icon-theme librsvg
+      - name: PyInstaller
+        run: |
+          PY="$(brew --prefix)/bin/python3"
+          "$PY" -m venv --system-site-packages .venv
+          .venv/bin/pip install -q pyinstaller pyinstaller-hooks-contrib
+      - name: App icon (.icns)
+        run: |
+          mkdir -p berth.iconset
+          for s in 16 32 64 128 256 512; do
+            rsvg-convert -w $s -h $s data/icons/io.github.subhadeeproy3902.Berth.svg -o berth.iconset/icon_${s}x${s}.png
+            rsvg-convert -w $((s*2)) -h $((s*2)) data/icons/io.github.subhadeeproy3902.Berth.svg -o berth.iconset/icon_${s}x${s}@2x.png
+          done
+          iconutil -c icns berth.iconset -o data/icons/berth.icns
+      - name: Build Berth.app
+        run: .venv/bin/pyinstaller --noconfirm packaging/pyinstaller/berth.spec
+      - name: Smoke test
+        run: ./dist/Berth.app/Contents/MacOS/Berth --version
+      - name: Disk image
+        run: hdiutil create -volname Berth -srcfolder dist/Berth.app -ov -format UDZO dist/Berth-macos-arm64.dmg
+      - uses: actions/upload-artifact@v4
+        with: { name: berth-macos, path: dist/Berth-macos-arm64.dmg }
+
+  windows:
+    name: Windows app (x64)
+    needs: check
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: msys2 {0}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          update: true
+          install: >-
+            mingw-w64-ucrt-x86_64-python
+            mingw-w64-ucrt-x86_64-python-gobject
+            mingw-w64-ucrt-x86_64-gtk4
+            mingw-w64-ucrt-x86_64-libadwaita
+            mingw-w64-ucrt-x86_64-adwaita-icon-theme
+            mingw-w64-ucrt-x86_64-python-pip
+            mingw-w64-ucrt-x86_64-pyinstaller
+            zip
+      - name: Build Berth.exe
+        run: python -m PyInstaller --noconfirm packaging/pyinstaller/berth.spec
+      - name: Smoke test
+        run: ./dist/Berth/Berth.exe --version
+      - name: Zip
+        run: cd dist && zip -qr Berth-windows-x64.zip Berth
+      - uses: actions/upload-artifact@v4
+        with: { name: berth-windows, path: dist/Berth-windows-x64.zip }
+
+  release:
+    name: GitHub Release
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [linux-tarball, flatpak, macos, windows]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with: { path: artifacts }
+      - name: Collect files + checksums
+        run: |
+          mkdir out
+          find artifacts -type f \( -name '*.tar.gz' -o -name '*.flatpak' -o -name '*.dmg' -o -name '*.zip' \) -exec cp {} out/ \;
+          cp scripts/install.sh out/install.sh
+          cd out && sha256sum * > SHA256SUMS.txt && ls -la
+      - name: Release notes from CHANGELOG
+        run: awk '/^## \[/{n++} n==1' CHANGELOG.md | tail -n +2 > notes.md
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: out/*
+          body_path: notes.md
+          name: Berth ${{ github.ref_name }}

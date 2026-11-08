@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.subhadeeproy3902.Berth</id>
+  <name>Berth</name>
+  <summary>A light, native Docker desktop for Linux</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+  <developer id="io.github.subhadeeproy3902"><name>Subhadeep Roy</name></developer>
+  <description>
+    <p>Berth manages the Docker Engine you already run: containers grouped by Compose project, live logs, a shell,
+       a file browser, images with Docker Hub search, volumes, networks, build cache, resource graphs and disk clean-up.</p>
+    <p>No virtual machine and no background service. It talks straight to the Docker socket, reads live stats from the
+       kernel, pauses them when you are not looking, and exits when you close the window.</p>
+  </description>
+  <launchable type="desktop-id">io.github.subhadeeproy3902.Berth.desktop</launchable>
+  <url type="homepage">https://github.com/subhadeeproy3902/open-docker-app</url>
+  <url type="bugtracker">https://github.com/subhadeeproy3902/open-docker-app/issues</url>
+  <url type="vcs-browser">https://github.com/subhadeeproy3902/open-docker-app</url>
+  <screenshots>
+    <screenshot type="default"><caption>Containers grouped by Compose project</caption><image>https://raw.githubusercontent.com/subhadeeproy3902/open-docker-app/main/docs/screenshots/containers-dark.png</image></screenshot>
+    <screenshot><caption>Log explorer with a level histogram</caption><image>https://raw.githubusercontent.com/subhadeeproy3902/open-docker-app/main/docs/screenshots/logs-explorer-dark.png</image></screenshot>
+    <screenshot><caption>Live resource usage</caption><image>https://raw.githubusercontent.com/subhadeeproy3902/open-docker-app/main/docs/screenshots/resource-usage-light.png</image></screenshot>
+  </screenshots>
+  <content_rating type="oars-1.1"/>
+  <releases><release version="1.0.0" date="2026-11-08"><description><p>First public release.</p></description></release></releases>
+</component>

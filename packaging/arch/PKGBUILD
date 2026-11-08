@@ -1,0 +1,22 @@
+# Maintainer: Subhadeep Roy <subha9.5roy350@gmail.com>
+pkgname=berth
+pkgver=1.0.0
+pkgrel=1
+pkgdesc="A light, native Docker desktop for Linux — containers, images, volumes, logs and live stats"
+arch=('any')
+url="https://github.com/subhadeeproy3902/open-docker-app"
+license=('MIT')
+depends=('python' 'python-gobject' 'python-cairo' 'gtk4' 'libadwaita>=1.7')
+optdepends=('docker: the Docker Engine (or podman)'
+            'vte4: built-in terminal in the Exec tab'
+            'polkit: start/stop the engine and edit daemon.json from the app'
+            'kubectl: Kubernetes view'
+            'kind: create local Kubernetes clusters')
+source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/berth-linux.tar.gz")
+sha256sums=('SKIP')
+
+package() {
+  cd "$srcdir/berth-$pkgver"
+  make install DESTDIR="$pkgdir" PREFIX=/usr
+  install -Dm644 LICENSE "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+}

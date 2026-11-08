@@ -1,0 +1,21 @@
+# Demo stack used for screenshots (runs inside an isolated docker:dind engine — see tools/demo/up.sh)
+services:
+  web:
+    image: nginx:alpine
+    ports: ["8080:80"]
+    depends_on: [api]
+  api:
+    image: busybox:latest
+    command: ["sh", "-c", "i=0; while true; do i=$$((i+1)); r=$$((RANDOM % 20)); if [ $$r -eq 0 ]; then echo \"ERROR payment gateway timeout order=$$i\"; elif [ $$r -lt 3 ]; then echo \"WARN slow query 812ms route=/cart\"; else echo \"INFO GET /products 200 $$((r*7))ms\"; fi; sleep 0.$$((r % 9 + 1)); done"]
+    ports: ["8000:8000"]
+  worker:
+    image: busybox:latest
+    command: ["sh", "-c", "while true; do echo \"INFO processed job $$RANDOM\"; [ $$((RANDOM % 15)) -eq 0 ] && echo \"WARN retrying email delivery\"; sleep 1; done"]
+  db:
+    image: postgres:16-alpine
+    environment: {POSTGRES_PASSWORD: demo, POSTGRES_DB: shop}
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+  cache:
+    image: redis:alpine
+    volumes: ["redisdata:/data"]
+volumes: {pgdata: {}, redisdata: {}}

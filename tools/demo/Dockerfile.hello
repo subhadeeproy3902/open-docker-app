@@ -1,0 +1,3 @@
+FROM busybox:latest
+RUN echo "hello from a demo build" > /hello.txt
+CMD ["cat", "/hello.txt"]

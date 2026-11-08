@@ -60,7 +60,7 @@ jobs:
   macos:
     name: macOS app (Apple Silicon)
     needs: check
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
       - name: GTK 4 + libadwaita + PyGObject (Homebrew)

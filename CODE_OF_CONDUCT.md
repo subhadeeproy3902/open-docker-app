@@ -19,8 +19,9 @@ political attacks, public or private harassment, and publishing others' private 
 
 ## Enforcement
 
-Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the maintainer at
-**subha9.5roy350@gmail.com**. All complaints will be reviewed and investigated promptly and fairly, and the privacy of
+Instances of abusive, harassing, or otherwise unacceptable behavior may be reported to the maintainers
+privately through [GitHub's private reporting](https://github.com/subhadeeproy3902/open-docker-app/security/advisories/new) (it reaches only the maintainers), or
+with GitHub's built-in **Report content** option on any issue or comment. All complaints will be reviewed and investigated promptly and fairly, and the privacy of
 the reporter will be respected. Maintainers may remove, edit, or reject comments, commits, code, issues and other
 contributions that do not align with this Code of Conduct, and may ban contributors temporarily or permanently.
 

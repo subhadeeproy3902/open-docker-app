@@ -1,6 +1,6 @@
-# Maintainer: Subhadeep Roy <subha9.5roy350@gmail.com>
+# Maintainer: The Berth contributors <https://github.com/subhadeeproy3902/open-docker-app>
 pkgname=berth
-pkgver=1.1.1
+pkgver=1.2.0
 pkgrel=1
 pkgdesc="A light, native Docker desktop for Linux — containers, images, volumes, logs and live stats"
 arch=('any')

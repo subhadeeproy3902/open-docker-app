@@ -141,7 +141,7 @@ Mac 上需要一个 Docker 引擎：**Colima**（`brew install colima docker && 
 
 ## 许可证
 
-[MIT](LICENSE) © 2026 Subhadeep Roy 及贡献者。
+[MIT](LICENSE) © 2026 [Berth 贡献者](https://github.com/subhadeeproy3902/open-docker-app/graphs/contributors)。
 
 *Docker 及其标志是 Docker, Inc. 的商标或注册商标。Berth 是独立的开源项目，与 Docker, Inc. 没有任何关联，也未获得其认可或赞助。*
 

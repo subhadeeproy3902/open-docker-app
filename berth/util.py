@@ -11,7 +11,7 @@ from concurrent.futures import ThreadPoolExecutor
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
 APP_ID = "io.github.subhadeeproy3902.Berth"
-VERSION = "1.1.1"
+VERSION = "1.2.0"
 ICON = os.environ.get("BERTH_ICON") or APP_ID     # icon name; `make install ICON=docker-desktop` swaps it
 
 
@@ -134,11 +134,14 @@ class Settings:
     def __init__(self):
         self.path = os.path.join(GLib.get_user_config_dir(), "berth", "settings.json")
         self.data = dict(self.DEFAULTS)
+        existed = False
         try:
             with open(self.path) as f:
                 self.data.update(json.load(f))
+            existed = True
         except (OSError, ValueError):
             pass
+        self.data.setdefault("onboarded", existed)      # first run shows the welcome; upgrades don't
 
     def __getitem__(self, k):
         return self.data.get(k, self.DEFAULTS.get(k))
@@ -275,7 +278,7 @@ def esc(s):
 
 def label(text="", css=(), xalign=0.0, ellipsize=True, **kw):
     lb = Gtk.Label(label=text, xalign=xalign, **kw)
-    if ellipsize:
+    if ellipsize and not kw.get("wrap"):              # wrapped text must never be cut short
         from gi.repository import Pango
         lb.set_ellipsize(Pango.EllipsizeMode.END)
     for c in css:

@@ -5,6 +5,7 @@ Run off-screen:  gtk4-broadwayd :9 &  then
 It creates its own throwaway container `berth-selftest` and volume `berth-selftest-vol` and removes them.
 """
 import os
+os.environ.setdefault("BERTH_NO_WELCOME", "1")      # the first-run welcome would cover the window
 import sys
 import time
 import traceback

@@ -79,6 +79,32 @@ def discover():
     return out
 
 
+def diagnose(address):
+    """Why an engine can or cannot be used, for onboarding and the 'engine is off' screen.
+    Returns (state, detail): running (detail = version) · stopped · denied · missing · unreachable (detail = error)."""
+    if address.startswith("tcp://"):
+        try:
+            return "running", (Engine(address).version() or {}).get("Version", "")
+        except (EngineError, OSError) as e:
+            return "unreachable", str(e)
+    path = address[7:] if address.startswith("unix://") else address
+    if not os.path.exists(path):
+        from .util import host_which
+        installed = any(host_which(b) for b in ("dockerd", "docker", "podman", "colima", "orbctl")) \
+            or os.path.exists("/usr/lib/systemd/system/docker.service")
+        return ("stopped" if installed else "missing"), ""
+    try:
+        _open(path, timeout=2).close()
+    except PermissionError:
+        return "denied", ""
+    except OSError:
+        return "stopped", ""                  # a socket file is left over but nothing listens
+    try:
+        return "running", (Engine(address).version() or {}).get("Version", "")
+    except (EngineError, OSError) as e:
+        return "unreachable", str(e)
+
+
 def docker_host_env(address):
     return address if address.startswith(("tcp://", "unix://")) else "unix://" + address
 

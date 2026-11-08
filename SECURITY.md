@@ -9,8 +9,7 @@
 ## Reporting a vulnerability
 
 Please **do not open a public issue**. Use GitHub's
-[private vulnerability reporting](https://github.com/subhadeeproy3902/open-docker-app/security/advisories/new) or e-mail
-**subha9.5roy350@gmail.com** with the details and steps to reproduce. You will get an answer within a few days.
+[private vulnerability reporting](https://github.com/subhadeeproy3902/open-docker-app/security/advisories/new) with the details and steps to reproduce. You will get an answer within a few days.
 
 ## Security model in short
 

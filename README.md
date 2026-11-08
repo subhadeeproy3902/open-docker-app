@@ -198,8 +198,10 @@ sh scripts/install.sh --uninstall      # or: make uninstall-user   ·   flatpak 
 
 ## Quick start
 
-1. Open **Berth** from your app menu (or run `berth`).
-2. If the engine is stopped, press **Start Docker Engine** (Linux asks for your password through polkit).
+1. Open **Berth** from your app menu (or run `berth`). The first time, a short **welcome** finds your engines, tells you
+   exactly what is missing (engine stopped, no permission, not installed) and can start the engine for you. It also
+   offers a sample container to try. Reopen it any time from the menu → **Welcome tour**.
+2. If the engine is stopped later, press **Start Docker Engine** (Linux asks for your password through polkit).
 3. Click a container for its logs, terminal, files and graphs; use the **⋮** menu for edit, export, save-as-image and more.
 4. Want another engine? **Settings → Docker Engine → Connected engine** lists the ones Berth found (Docker, rootless, Podman, contexts).
 
@@ -270,7 +272,7 @@ make check                  # syntax check · tests: see CONTRIBUTING.md
 
 ## License
 
-[MIT](LICENSE) © 2026 Subhadeep Roy and contributors.
+[MIT](LICENSE) © 2026 [The Berth contributors](https://github.com/subhadeeproy3902/open-docker-app/graphs/contributors).
 
 Berth stands on the shoulders of [GTK](https://gtk.org), [libadwaita](https://gnome.pages.gitlab.gnome.org/libadwaita/),
 [PyGObject](https://pygobject.gnome.org), [VTE](https://gitlab.gnome.org/GNOME/vte), [Trivy](https://trivy.dev) and [kind](https://kind.sigs.k8s.io).

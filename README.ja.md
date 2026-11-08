@@ -141,7 +141,7 @@ Mac では Docker エンジンが必要です：**Colima**（`brew install colim
 
 ## ライセンス
 
-[MIT](LICENSE) © 2026 Subhadeep Roy およびコントリビューター。
+[MIT](LICENSE) © 2026 [Berth コントリビューター](https://github.com/subhadeeproy3902/open-docker-app/graphs/contributors)。
 
 *Docker および Docker のロゴは Docker, Inc. の商標または登録商標です。Berth は独立したオープンソースプロジェクトであり、Docker, Inc. とは提携・承認・後援の関係にありません。*
 

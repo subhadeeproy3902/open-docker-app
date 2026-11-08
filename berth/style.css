@@ -117,3 +117,21 @@ window.large-icons .berth-table image { -gtk-icon-size: 22px; }
 .explorer-bar.second { padding-top: 4px; padding-bottom: 8px; }
 .explorer-hist { margin: 0 var(--page-x) 6px var(--page-x); padding: 6px 4px; }
 .explorer-status { margin: 0 var(--page-x) 4px calc(var(--page-x) + 2px); }
+
+/* ── first-run welcome ────────────────────────────────────────────────────── */
+.onb-step { padding: 8px 40px 12px 40px; }
+.onb-logo { margin: 8px 0 10px 0; }
+.onb-title { font-size: 1.75em; font-weight: 800; letter-spacing: -0.01em; }
+.onb-subtitle { font-size: 1.02em; opacity: 0.68; margin-bottom: 18px; }
+.onb-features { margin-top: 6px; }
+.onb-feature { min-width: 420px; }
+.onb-feature-icon { color: @accent_color; margin-top: 2px; }
+.onb-wide { margin-bottom: 14px; }
+.onb-callout { padding: 16px 18px; }
+.onb-cmd { font-family: monospace; font-size: 0.92em; padding: 8px 10px; border-radius: 8px; background: alpha(currentColor, 0.06); }
+.onb-done-icon { color: white; background: #26a269; border-radius: 99px; padding: 14px; margin: 4px 0 8px 0; }
+.onb-tips { margin-top: 18px; }
+.onb-key { font-family: monospace; font-size: 0.85em; font-weight: 650; padding: 2px 8px; border-radius: 6px;
+           border: 1px solid alpha(currentColor, 0.2); min-width: 92px; }
+.onb-footer { padding: 12px 24px 18px 24px; }
+row.monospace-subtitle .subtitle { font-family: monospace; font-size: 0.85em; }

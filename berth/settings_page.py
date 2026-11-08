@@ -126,7 +126,7 @@ class SettingsPage(Gtk.Box):
         ab.connect("activated", lambda *_: win.get_application().activate_action("about", None))
         about.add(ab)
         pp.add(about)
-        store.connect("engine", lambda *_: self.on_show())
+        store.connect("engine", lambda *_: self.get_mapped() and self.on_show())   # refresh only while visible
 
     def _a11y(self, key, value):
         self.s[key] = value
@@ -134,8 +134,10 @@ class SettingsPage(Gtk.Box):
 
     # ── engines ──
     def _fill_engines(self):
+        bg(discover, done=self._show_engines)        # discover() runs `docker context ls`: never on the UI thread
+
+    def _show_engines(self, found):
         self._filling = True
-        found = discover()
         cur = self.store.engine.path
         if all(a != cur for _l, a in found):
             found.append(("Current", cur))

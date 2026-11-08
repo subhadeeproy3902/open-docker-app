@@ -2,7 +2,11 @@
 import os
 import sys
 
-import gi
+# Draw with OpenGL, not GTK's default Vulkan: creating a Vulkan instance loads every GPU driver, which takes ~2 s and
+# wakes a sleeping discrete GPU on hybrid laptops (measured: GL 80 ms, Vulkan 2065 ms). Anyone can still override it.
+os.environ.setdefault("GSK_RENDERER", "gl")
+
+import gi  # noqa: E402
 
 gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
@@ -54,6 +58,7 @@ class Window(Adw.ApplicationWindow):
         menu.append_submenu("Theme", theme)
         menu.append("Settings", "app.preferences")
         menu.append("Keyboard shortcuts", "app.shortcuts")
+        menu.append("Welcome tour", "app.welcome")
         menu.append("About Berth", "app.about")
         sh.pack_end(Gtk.MenuButton(icon_name="open-menu-symbolic", menu_model=menu, tooltip_text="Menu", primary=True))
         self.theme_btn = icon_button("weather-clear-night-symbolic", "Switch light / dark", self.toggle_theme)
@@ -379,6 +384,7 @@ class App(Adw.Application):
         act("preferences", lambda *_: self.win.go("settings"))
         act("about", lambda *_: self._about())
         act("shortcuts", lambda *_: self._shortcuts())
+        act("welcome", lambda *_: self._welcome())
         act("quit", lambda *_: self._really_quit() if self.win else self.quit())
         act("search", lambda *_: self.win.focus_search())
         act("go", lambda _a, p: self.win.go(PAGES[p.get_int32()][0]), GLib.VariantType.new("i"))
@@ -429,6 +435,8 @@ class App(Adw.Application):
                 self.win.page = self.start_page
                 self.win.select_row(self.start_page)
         self.win.present()
+        if not self.settings["onboarded"] and not self.shot and not os.environ.get("BERTH_NO_WELCOME"):
+            GLib.timeout_add(300, lambda: self._welcome() and False)
         if os.environ.get("BERTH_OPEN"):            # dev: open a container's details once the list is loaded
             def open_it():
                 c = next((c for c in self.win.store.containers
@@ -455,11 +463,21 @@ class App(Adw.Application):
                                      lambda: GLib.timeout_add(50, take) and False)
 
     def _about(self):
-        Adw.AboutDialog(application_name="Berth", application_icon=app_icon(), version=VERSION,
-                        developer_name="Subhadeep Roy", license_type=Gtk.License.MIT_X11,
-                        comments="A light, native Docker desktop for Linux. No virtual machine, no background service: "
-                                 "it talks straight to the Docker Engine and reads live stats from the kernel.",
-                        website="https://github.com/subhadeeproy3902/open-docker-app", issue_url="https://github.com/subhadeeproy3902/open-docker-app/issues").present(self.win)
+        repo = "https://github.com/subhadeeproy3902/open-docker-app"
+        d = Adw.AboutDialog(application_name="Berth", application_icon=app_icon(), version=VERSION,
+                            developer_name="Open source · MIT licensed", license_type=Gtk.License.MIT_X11,
+                            copyright="© 2026 The Berth contributors",
+                            developers=[f"The Berth contributors {repo}/graphs/contributors"],
+                            comments="A light, native, open-source Docker desktop. No virtual machine, no background "
+                                     "service, no account: it talks straight to your Docker Engine.",
+                            website=repo, issue_url=f"{repo}/issues")
+        d.add_link("Contribute", f"{repo}/blob/main/CONTRIBUTING.md")
+        d.add_link("Discussions", f"{repo}/discussions")
+        d.present(self.win)
+
+    def _welcome(self):
+        from .onboarding import Onboarding
+        Onboarding(self.win).present(self.win)
 
     def _shortcuts(self):
         d = Adw.AlertDialog(heading="Keyboard shortcuts")

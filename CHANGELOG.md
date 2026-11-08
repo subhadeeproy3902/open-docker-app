@@ -3,6 +3,31 @@
 All notable changes to Berth are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [1.2.0] - 2026-11-08
+
+### Added
+- **Welcome on first run**, four short steps, all skippable:
+  1. What Berth is.
+  2. **Connect your engine**: lists every engine found (Docker, rootless, Podman, Colima, OrbStack, Rancher, contexts)
+     with its live state, and says exactly what to do: start it (one click, polkit), join the `docker` group (with a
+     copy button), install one (per platform), or type a remote address.
+  3. **Make it yours**: theme, text size, density, tray.
+  4. **Run your first container**: a small sample web page on `localhost:8088`, with keyboard tips.
+  Reopen it any time: menu → *Welcome tour*. People upgrading keep their settings and are not shown it.
+- Empty Containers page offers **Run a sample container** and **Pull an image** instead of a dead end.
+
+### Changed
+- **Opens in about a second** (it took 3 s or more on hybrid-graphics laptops). Berth now draws with OpenGL instead of GTK's default Vulkan. Creating a Vulkan
+  instance loads every GPU driver; on hybrid-graphics laptops it took ~2 s and woke the sleeping discrete GPU
+  (measured: GL 80 ms, Vulkan 2,065 ms). `GSK_RENDERER` still overrides it.
+- Listing engines (`docker context ls`) no longer runs on the UI thread at startup.
+- Credits: the About window, LICENSE, READMEs and package metadata now credit **The Berth contributors**. Conduct
+  and security reports go through GitHub's private reporting instead of a personal e-mail address.
+
+### Fixed
+- Wrapped text in dialogs could be cut off with "…".
+- The Containers page kept saying "Nothing matches" after a search was cleared.
+
 ## [1.1.1] - 2026-11-08
 
 ### Changed

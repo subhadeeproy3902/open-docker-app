@@ -394,8 +394,18 @@ class ContainersPage(Gtk.Box):
         sw = table_card(self.view)
         self.stack = Gtk.Stack()
         self.stack.add_named(sw, "list")
-        self.empty = Adw.StatusPage(icon_name="view-grid-symbolic", title="No containers",
-                                    description="Run an image from the Images page, or start a Compose project.")
+        self.empty = Adw.StatusPage(icon_name="view-grid-symbolic")
+        acts = Gtk.Box(spacing=10, halign=Gtk.Align.CENTER)
+        self.empty_run = Gtk.Button(label="Run a sample container")
+        self.empty_run.add_css_class("pill")
+        self.empty_run.add_css_class("suggested-action")
+        self.empty_run.connect("clicked", lambda *_: self._run_sample())
+        self.empty_pull = Gtk.Button(label="Pull an image")
+        self.empty_pull.add_css_class("pill")
+        self.empty_pull.connect("clicked", lambda *_: self._pull_image())
+        acts.append(self.empty_run)
+        acts.append(self.empty_pull)
+        self.empty.set_child(acts)
         self.stack.add_named(self.empty, "empty")
         tv.set_content(self.stack)
         self.nav.add(Adw.NavigationPage(title="Containers", child=tv, tag="list"))
@@ -506,9 +516,15 @@ class ContainersPage(Gtk.Box):
         for key, n in (("all", len(allc)), ("running", running), ("unhealthy", unhealthy), ("stopped", stopped)):
             self.filter_toggles[key].set_label(f"{key.capitalize()} {n}" if key != "all" else f"All {n}")
         self.stack.set_visible_child_name("list" if entries else "empty")
-        if not entries and self.store.containers:
-            self.empty.set_title("Nothing matches")
-            self.empty.set_description("Clear the search or the running-only filter.")
+        if not entries:
+            filtered = bool(self.store.containers)
+            self.empty.set_icon_name("edit-find-symbolic" if filtered else "view-grid-symbolic")
+            self.empty.set_title("Nothing matches" if filtered else "No containers yet")
+            self.empty.set_description("Clear the search or pick another filter above." if filtered else
+                                       "A container is a running copy of an image. Start with a small sample web "
+                                       "page, pull an image to run, or open a Compose file.")
+            self.empty_run.set_visible(not filtered)
+            self.empty_pull.set_visible(not filtered)
 
         def row_for_container(c, in_group):
             r = self.items.get(c["Id"])
@@ -602,6 +618,28 @@ class ContainersPage(Gtk.Box):
     def _on_filter(self, name):
         self.status_filter = name or "all"
         self._sync()
+
+    def _run_sample(self):
+        from .onboarding import SAMPLE_NAME, SAMPLE_PORT, run_sample
+        self.empty_run.set_sensitive(False)
+        self.win.toast("Downloading and starting the sample…")
+
+        def done(cid):
+            self.empty_run.set_sensitive(True)
+            self.store.refresh("containers")
+            t = Adw.Toast(title=f"{SAMPLE_NAME} is running on localhost:{SAMPLE_PORT}", button_label="Open", timeout=8)
+            t.connect("button-clicked", lambda *_: __import__("webbrowser").open(f"http://localhost:{SAMPLE_PORT}"))
+            self.win.toasts.add_toast(t)
+
+        def fail(e):
+            self.empty_run.set_sensitive(True)
+            self.win.toast(f"Couldn't run the sample: {e}")
+        run_sample(self.store, lambda t: False, done, fail)
+
+    def _pull_image(self):
+        from .pages import PullDialog
+        self.win.go("images")
+        PullDialog(self.win, self.store).present(self.win)
 
     def show_unhealthy(self):
         """Jump straight to the unhealthy containers (used by the status bar)."""

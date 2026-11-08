@@ -4,6 +4,7 @@ Off-screen:  gtk4-broadwayd :9 &  then
   GDK_BACKEND=broadway BROADWAY_DISPLAY=:9 XDG_CONFIG_HOME=/tmp/x dbus-run-session -- python3 tests/clickall.py
 Dialogs it opens are closed without confirming; only its own throwaway container `berth-clicktest` is acted on."""
 import os
+os.environ.setdefault("BERTH_NO_WELCOME", "1")      # the first-run welcome would cover the window
 import sys
 import time
 import traceback

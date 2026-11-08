@@ -30,6 +30,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ### Fixed
 - macOS: the app is now ad-hoc signed in CI, which avoids the "Berth is damaged" message on Apple Silicon.
+- Status bar: no empty dividers while the engine is stopped.
 
 ## [1.0.1] - 2026-11-08
 

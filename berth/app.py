@@ -154,11 +154,14 @@ class Window(Adw.ApplicationWindow):
         self.sb_mem = label("", css=["caption", "numeric"], ellipsize=False)
         self.sb_disk = label("", css=["caption", "numeric"], ellipsize=False)
         self.sb_saver = label("", css=["caption", "dim-label"], hexpand=True, xalign=1.0)
-        for i, w in enumerate((self.sb_engine, self.sb_cpu, self.sb_mem, self.sb_disk)):
-            if i:
-                bar.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=12, margin_end=12,
-                                         css_classes=["statusbar-sep"]))
-            bar.append(w)
+        bar.append(self.sb_engine)
+        for w in (self.sb_cpu, self.sb_mem, self.sb_disk):
+            seg = Gtk.Box(visible=False)          # separator + value, hidden while the value is empty (engine off)
+            seg.append(Gtk.Separator(orientation=Gtk.Orientation.VERTICAL, margin_start=12, margin_end=12,
+                                     css_classes=["statusbar-sep"]))
+            seg.append(w)
+            w.connect("notify::label", lambda lb, _p, sg=seg: sg.set_visible(bool(lb.get_label())))
+            bar.append(seg)
         self.sb_bad = Gtk.Button(visible=False, valign=Gtk.Align.CENTER, tooltip_text="Show the unhealthy containers")
         self.sb_bad.add_css_class("flat")
         self.sb_bad.add_css_class("statusbar-alert")

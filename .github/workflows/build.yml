@@ -38,7 +38,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: make dist
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: berth-linux, path: dist/berth-linux.tar.gz }
 
   flatpak:
@@ -87,11 +87,11 @@ jobs:
         run: |
           BERTH_SHOT_DELAY=6 ./dist/Berth.app/Contents/MacOS/Berth --screenshot "$PWD/launch-macos.png"
           test -s launch-macos.png
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: launch-screenshot-macos, path: launch-macos.png }
       - name: Disk image
         run: hdiutil create -volname Berth -srcfolder dist/Berth.app -ov -format UDZO dist/Berth-macos-arm64.dmg
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: berth-macos, path: dist/Berth-macos-arm64.dmg }
 
   windows:
@@ -125,11 +125,11 @@ jobs:
         run: |
           BERTH_SHOT_DELAY=6 ./dist/Berth/Berth.exe --screenshot "$(cygpath -w "$PWD")\\launch-windows.png"
           test -s launch-windows.png
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: launch-screenshot-windows, path: launch-windows.png }
       - name: Zip
         run: cd dist && zip -qr Berth-windows-x64.zip Berth
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with: { name: berth-windows, path: dist/Berth-windows-x64.zip }
 
   release:

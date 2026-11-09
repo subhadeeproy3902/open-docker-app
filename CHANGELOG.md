@@ -3,6 +3,35 @@
 All notable changes to Berth are documented here. The format follows [Keep a Changelog](https://keepachangelog.com/)
 and the project uses [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added — Connect (sidebar section)
+- **Databases** (#25): find database containers and explore them — PostgreSQL (incl. PostGIS, TimescaleDB, pgvector),
+  MySQL / MariaDB, Redis / Valkey, MongoDB, Vespa, OpenSearch / Elasticsearch, Typesense, Meilisearch, and SQLite files
+  from any container or volume.
+  - Tree of schemas / tables / keys / collections / indices with row estimates and sizes; paged data; structure
+    (columns, types, constraints, indexes; Vespa `.sd` schemas; mappings); a query console (SQL, Redis commands, YQL,
+    `METHOD /path` + JSON) with Ctrl+Enter and per-database history; export to CSV / JSON / Markdown; row inspector.
+  - No drivers, no published ports: Berth runs the client inside the image (`psql`, `mariadb`, `redis-cli`, `mongosh`)
+    or speaks HTTP to the container. Passwords come from the container's env (or `*_FILE` secrets) and travel as env
+    variables of the exec, never in argv.
+  - **Read-only by default**, enforced as low as possible: Postgres in read-only transactions, MySQL
+    `SESSION TRANSACTION READ ONLY` plus a statement check, read-only command lists for Redis / HTTP engines, Mongo
+    filters are data (EJSON) and the shell needs “Allow changes”. Destructive statements ask again even then.
+  - SQLite opens a private copy (including recent WAL writes); the original is never touched.
+- **Ports & sharing** (#26, #27):
+  - **Local addresses**: `http(s)://name.localhost` for any container port — one opt-in Caddy container published on
+    127.0.0.1 only, reaching targets by name (user networks) or IP (default bridge, re-pointed after restarts). HTTPS
+    with a local CA you can export and trust.
+  - **Public links**: share a port with a Cloudflare quick tunnel (no account) or your own tunnel token; `cloudflared`
+    runs in the target's network namespace. A warning first, a status-bar marker while anything is public, and links
+    stop when Berth quits unless you keep them.
+  - **Ports in use**: every published port, flagged when it is open to the whole network (0.0.0.0).
+- Container menu: *Browse database*, *Give it a local address…*, *Share publicly…*.
+- `tests/connect.py`: integration test against a real engine (every database engine, read-only enforcement, SQLite +
+  WAL, proxy over HTTP/HTTPS, IP change after restart, public tunnel fetched over the internet); runs in CI without
+  the tunnel.
+
 ## [1.2.1] - 2026-11-09
 
 ### Fixed

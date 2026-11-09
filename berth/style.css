@@ -138,3 +138,22 @@ window.large-icons .berth-table image { -gtk-icon-size: 22px; }
            border: 1px solid alpha(currentColor, 0.2); min-width: 92px; }
 .onb-footer { padding: 12px 24px 18px 24px; }
 row.monospace-subtitle .subtitle { font-family: monospace; font-size: 0.85em; }
+
+/* ── databases ────────────────────────────────────────────────────────────── */
+.db-side { padding: var(--page-y) 10px var(--page-x) var(--page-x); }
+.db-main { padding: var(--page-y) var(--page-x) var(--page-x) 14px; }
+.db-main .table-card { margin: 0; }
+.db-tree { background: none; }
+.db-tree > row { min-height: 0; padding: 4px 6px; border-radius: 8px; }
+.db-editor { font-size: 0.95em; background: none; }
+.db-grid > listview > row > cell { padding: 4px var(--cell-x); }
+.db-grid > header > button { text-transform: none; letter-spacing: 0; font-family: monospace; font-size: 0.85em; }
+.write-toggle { padding: 3px 10px; border-radius: 99px; background: alpha(currentColor, 0.06); }
+.write-toggle.on { background: alpha(#e01b24, 0.16); color: #c01c28; }
+.write-toggle.on label { font-weight: 700; }
+
+/* ── ports & sharing ──────────────────────────────────────────────────────── */
+row.mono-title .title { font-family: monospace; }
+.share-warning { padding: 12px 14px; border-radius: 10px; background: alpha(#e5a50a, 0.16); color: mix(currentColor, #9c6e03, 0.5); }
+.share-live { color: #26a269; }
+.statusbar-share { color: #c88800; font-weight: 650; font-size: 0.85em; min-height: 20px; padding: 0 8px; margin-left: 8px; }

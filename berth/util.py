@@ -129,7 +129,7 @@ class Settings:
     DEFAULTS = {"theme": "system", "saver": True, "interval": 2, "window": [1240, 800], "expanded": {},
                 "software": False, "range": 600, "page": "containers", "tray": False, "engine": "",
                 "text_scale": 100, "density": "comfortable", "strong_borders": False, "reduce_motion": False,
-                "large_icons": False}
+                "large_icons": False, "db_history": {}, "routes": [], "proxy_ports": [80, 443]}
 
     def __init__(self):
         self.path = os.path.join(GLib.get_user_config_dir(), "berth", "settings.json")
@@ -302,8 +302,8 @@ class PageHeader(Gtk.Box):
     def __init__(self, title, subtitle=""):
         super().__init__(spacing=16, css_classes=["page-header"])
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True, valign=Gtk.Align.CENTER)
-        self._t = Gtk.Label(label=title, xalign=0, css_classes=["page-title"])
         from gi.repository import Pango
+        self._t = Gtk.Label(label=title, xalign=0, css_classes=["page-title"], ellipsize=Pango.EllipsizeMode.END)
         self._s = Gtk.Label(label=subtitle, xalign=0, css_classes=["page-subtitle"], ellipsize=Pango.EllipsizeMode.END,
                             visible=bool(subtitle))
         text.append(self._t)

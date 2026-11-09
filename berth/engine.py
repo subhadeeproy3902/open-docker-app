@@ -311,10 +311,13 @@ class Engine:
     def stats_once(self, cid):
         return self.req("GET", f"/containers/{cid}/stats", {"stream": False, "one-shot": True}, timeout=10)
 
-    def exec_run(self, cid, cmd, limit=512 * 1024, timeout=20):
-        """Run a non-interactive command in a running container; returns (exit_code, stdout, stderr)."""
-        ex = self.req("POST", f"/containers/{cid}/exec",
-                      body={"AttachStdout": True, "AttachStderr": True, "Tty": False, "Cmd": cmd})
+    def exec_run(self, cid, cmd, limit=512 * 1024, timeout=20, env=None):
+        """Run a non-interactive command in a running container; returns (exit_code, stdout, stderr).
+        env: extra variables (KEY=value) for this command only, e.g. a password, so it never appears in argv."""
+        body = {"AttachStdout": True, "AttachStderr": True, "Tty": False, "Cmd": cmd}
+        if env:
+            body["Env"] = [f"{k}={v}" for k, v in env.items()]
+        ex = self.req("POST", f"/containers/{cid}/exec", body=body)
         st = self.stream(f"/exec/{ex['Id']}/start", method="POST", body={"Detach": False, "Tty": False})
         buf, out, err, waited = b"", b"", b"", 0.0
         try:

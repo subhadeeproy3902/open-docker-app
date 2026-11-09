@@ -31,6 +31,18 @@ jobs:
           desktop-file-validate /tmp/berth.desktop
           appstreamcli validate --no-net --pedantic data/io.github.subhadeeproy3902.Berth.metainfo.xml || appstreamcli validate --no-net data/io.github.subhadeeproy3902.Berth.metainfo.xml
 
+  connect:
+    name: Databases & sharing (real Docker)
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: PyGObject (the volume helper code imports it)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 >/dev/null
+      - name: Integration test against the runner's Docker (public tunnel skipped)
+        run: /usr/bin/python3 tests/connect.py --no-tunnel
+
   linux-tarball:
     name: Linux tarball
     needs: check

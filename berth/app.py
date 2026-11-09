@@ -16,6 +16,8 @@ if "GSK_RENDERER" not in os.environ and Gtk.get_major_version() == 4 and Gtk.get
     os.environ["GSK_RENDERER"] = "gl" if Gtk.get_minor_version() >= 20 else "ngl"
 
 from .containers import ContainersPage  # noqa: E402
+from .db_page import DatabasesPage  # noqa: E402
+from .sharing_page import SharingPage  # noqa: E402
 from . import theme  # noqa: E402
 from .theme import apply_accessibility  # noqa: E402
 from .files import cleanup_helpers  # noqa: E402
@@ -28,12 +30,14 @@ from .util import APP_ID, VERSION, app_icon, themed, Settings, fmt_bytes, fmt_pc
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGES = [("containers", ContainersPage), ("images", ImagesPage), ("volumes", VolumesPage), ("networks", NetworksPage),
+         ("databases", DatabasesPage), ("sharing", SharingPage),
          ("logs", LogsPage), ("resources", ResourcesPage), ("disk", DiskPage),
          ("builds", BuildHistoryPage), ("cache", BuildsPage),
          ("kubernetes", K8sPage),
          ("settings", SettingsPage)]
 # Sidebar sections: the first page of each group gets a small heading; Settings sits apart at the bottom.
-GROUPS = {"containers": "Manage", "logs": "Observe", "builds": "Build", "kubernetes": "Orchestrate"}
+GROUPS = {"containers": "Manage", "databases": "Connect", "logs": "Observe", "builds": "Build",
+          "kubernetes": "Orchestrate"}
 THEMES = {"system": Adw.ColorScheme.DEFAULT, "light": Adw.ColorScheme.FORCE_LIGHT, "dark": Adw.ColorScheme.FORCE_DARK}
 
 
@@ -179,6 +183,12 @@ class Window(Adw.ApplicationWindow):
         self.sb_bad.add_css_class("statusbar-alert")
         self.sb_bad.connect("clicked", lambda *_: (self.go("containers"), self.pages["containers"].show_unhealthy()))
         bar.append(self.sb_bad)
+        self.sb_share = Gtk.Button(visible=False, valign=Gtk.Align.CENTER, tooltip_text="Containers shared on the "
+                                   "internet — click to see or stop them")
+        self.sb_share.add_css_class("flat")
+        self.sb_share.add_css_class("statusbar-share")
+        self.sb_share.connect("clicked", lambda *_: self.go("sharing"))
+        bar.append(self.sb_share)
         bar.append(self.sb_saver)
         return bar
 
@@ -260,6 +270,12 @@ class Window(Adw.ApplicationWindow):
             self.sb_bad.set_label(f"⚠ {len(bad)} unhealthy")
             self.sb_bad.set_tooltip_text("Unhealthy: " + ", ".join(c["Names"][0].lstrip("/") for c in bad[:8]) + " — click to show")
         self.counts["images"].set_text(str(len(self.store.images)) if self.store.images is not None else "")
+        live = sum(1 for c in cs if (c.get("Labels") or {}).get("io.berth.role") == "tunnel" and c["State"] == "running")
+        self.sb_share.set_visible(live > 0)
+        self.sb_share.set_label(f"● {live} public link{'s' if live != 1 else ''}")
+        from .db import detect
+        nd = sum(1 for c in cs if detect(c))
+        self.counts["databases"].set_text(str(nd) if nd else "")
         self.counts["volumes"].set_text(str(len(self.store.volumes)) if self.store.volumes is not None else "")
 
     # ── navigation ──
@@ -469,6 +485,17 @@ class App(Adw.Application):
             GLib.timeout_add_seconds(int(os.environ.get("BERTH_SHOT_DELAY", "6")),
                                      lambda: GLib.timeout_add(50, take) and False)
 
+    def do_shutdown(self):
+        """Public links stop with Berth unless the user chose to keep them (a share should never outlive the app
+        by accident)."""
+        if self.win is not None and self.win.store.up and not self.shot:
+            try:
+                from .sharing import stop_unpinned
+                stop_unpinned(self.win.store.engine)
+            except Exception:  # noqa: BLE001 — never block quitting
+                pass
+        Adw.Application.do_shutdown(self)
+
     def _about(self):
         repo = "https://github.com/subhadeeproy3902/open-docker-app"
         d = Adw.AboutDialog(application_name="Berth", application_icon=app_icon(), version=VERSION,
@@ -489,8 +516,9 @@ class App(Adw.Application):
     def _shortcuts(self):
         d = Adw.AlertDialog(heading="Keyboard shortcuts")
         d.set_body_use_markup(True)
-        d.set_body("<tt>Ctrl+F</tt>  Search the current page\n<tt>Ctrl+1…9</tt>  Containers, Images, Volumes, Networks, "
-                   "Logs, Resource usage, Disk usage, Builds\n<tt>Ctrl+,</tt>  Settings\n<tt>Ctrl+Q</tt>  Quit")
+        d.set_body("<tt>Ctrl+F</tt>  Search the current page\n<tt>Ctrl+1…9</tt>  " + ", ".join(
+            cls.title for _k, cls in PAGES[:9]) + "\n<tt>Ctrl+Enter</tt>  Run the query (Databases)\n"
+            "<tt>Ctrl+,</tt>  Settings\n<tt>Ctrl+Q</tt>  Quit")
         d.add_response("ok", "Close")
         d.present(self.win)
 

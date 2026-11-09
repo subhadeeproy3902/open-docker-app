@@ -69,6 +69,8 @@ keeps a backend service running, and asks for at least 4 GB of RAM. Berth is the
 | Image vulnerability scan | ✅ (Trivy, open source) | ✅ (Docker Scout, account) |
 | Kubernetes | ✅ any kubeconfig + local clusters via kind | ✅ built-in cluster |
 | Podman / remote engines | ✅ | ❌ |
+| Database explorer (Postgres, MySQL, Redis, MongoDB, Vespa, OpenSearch …) | ✅ built in, read-only by default | ❌ (third-party extensions) |
+| `name.localhost` addresses and public share links | ✅ built in (Caddy, Cloudflare Tunnel) | ❌ (third-party extensions) |
 | Extensions marketplace, Docker AI | ❌ (not planned) | ✅ |
 
 [dd-linux]: https://docs.docker.com/desktop/setup/install/linux/
@@ -109,6 +111,8 @@ arrives; there are no animations or timers while idle. A *Software rendering* sw
 | <img src="docs/screenshots/logs-explorer-dark.png" alt="Log explorer"> **Log explorer** — Loki/Grafana-style histogram coloured by level, drag to zoom, Live / 5 min … 7 days, level filters with counts, regex search, per-container colours. | <img src="docs/screenshots/resource-usage-dark.png" alt="Resource usage"> **Resource usage** — live CPU and memory per Compose project (1–30 min), totals, heaviest containers with sparklines. |
 | <img src="docs/screenshots/files-editor-light.png" alt="File editor"> **Files** — browse, view and **edit** files in running containers and in volumes; upload, download, rename, delete. | <img src="docs/screenshots/container-stats-dark.png" alt="Container stats"> **Per-container stats** — CPU, memory, network and disk graphs with hover values. |
 | <img src="docs/screenshots/images-dark.png" alt="Images"> **Images** — in use / unused / dangling, Docker Hub search & pull with progress, run with ports/env/volumes, vulnerability scan, tag, push, save / load. | <img src="docs/screenshots/settings-light.png" alt="Settings"> **Settings** — light / dark / system theme, **accessibility** (text size 85–150 %, compact / comfortable / spacious density, stronger borders and contrast, larger icons, reduce motion), resource saver, engine switcher, registry sign-in, `daemon.json` editor, optional tray icon. |
+
+| <img src="docs/screenshots/databases-dark.png" alt="Database explorer"> **Databases** — browse and query **PostgreSQL, MySQL / MariaDB, Redis / Valkey, MongoDB, Vespa, OpenSearch / Elasticsearch, Typesense, Meilisearch** and SQLite files in your containers: tables / keys / collections / indices, paged data, structure and indexes, a query console with history, export to CSV / JSON / Markdown. No drivers and no extra ports (Berth uses the client inside the image), **read-only unless you switch on “Allow changes”**. | <img src="docs/screenshots/sharing-light.png" alt="Ports and sharing"> **Ports & sharing** — give a container a friendly address like `https://shop.localhost` (one small local proxy, on 127.0.0.1 only), **share a port publicly** with a Cloudflare Tunnel link (no account needed; stops when Berth quits unless you keep it), and see every published port, with a warning on the ones open to your whole network. |
 
 **Everything else**
 

@@ -314,6 +314,14 @@ class ActionsCell(Gtk.Box):
                 m.append("Resume", f"ctr.verb::unpause|{cid}")
             for pub, _ in ports(c)[:4]:
                 m.append(f"Open localhost:{pub}", f"ctr.port::{pub}")
+            if c["State"] == "running" and not labels(c).get("io.berth.role"):
+                conn = Gio.Menu()
+                from .db import detect
+                if detect(c):
+                    conn.append("Browse database", f"ctr.db::{cid}")
+                conn.append("Give it a local address…", f"ctr.expose::{cid}")
+                conn.append("Share publicly…", f"ctr.share::{cid}")
+                m.append_section(None, conn)
             extra = Gio.Menu()
             extra.append("Copy docker run command", f"ctr.runcmd::{cid}")
             extra.append("Save as image…", f"ctr.commit::{cid}")
@@ -417,7 +425,10 @@ class ContainersPage(Gtk.Box):
                          ("copy", self._a_copy),
                          ("edit", lambda v: EditDialog(self.win, self.store, v).present(self.win)),
                          ("runcmd", lambda v: self.actions.copy_run(v)), ("commit", lambda v: self.actions.commit(v)),
-                         ("export", lambda v: self.actions.export_fs(v))):
+                         ("export", lambda v: self.actions.export_fs(v)),
+                         ("db", lambda v: (self.win.go("databases"), self.win.pages["databases"].open(v))),
+                         ("expose", lambda v: self._sharing_dialog("ExposeDialog", v)),
+                         ("share", lambda v: self._sharing_dialog("ShareDialog", v))):
             a = Gio.SimpleAction.new(name, GLib.VariantType.new("s"))
             a.connect("activate", lambda _a, p, f=fn: f(p.get_string()))
             ag.add_action(a)
@@ -618,6 +629,10 @@ class ContainersPage(Gtk.Box):
     def _on_filter(self, name):
         self.status_filter = name or "all"
         self._sync()
+
+    def _sharing_dialog(self, kind, cid):
+        from . import sharing_page
+        getattr(sharing_page, kind)(self.win.pages["sharing"], cid).present(self.win)
 
     def _run_sample(self):
         from .onboarding import SAMPLE_NAME, SAMPLE_PORT, run_sample

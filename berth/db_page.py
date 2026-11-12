@@ -607,7 +607,16 @@ class RecordPanel(Gtk.Box):
                 card.append(sv)
             box.append(card)
         else:
-            text = "" if f.value is None else f.value
+            text = "" if f.value is None else str(f.value)
+        if not f.binary and f.readonly == "x":       # values as listed (read-only): a plain label always shows
+            vl = Gtk.Label(label=(text or "NULL")[:20000], wrap=True, wrap_mode=Pango.WrapMode.WORD_CHAR, xalign=0, hexpand=True,
+                           selectable=True, css_classes=["db-value-label"] + (["db-null"] if f.value is None else []))
+            frame = Gtk.Box(css_classes=["db-value-frame"])
+            frame.append(vl)
+            box.append(frame)
+            self.widgets.append(w)
+            return box
+        if not f.binary:
             if f.json and text:
                 try:
                     text = json.dumps(json.loads(text), indent=2, ensure_ascii=False)

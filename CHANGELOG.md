@@ -18,6 +18,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
   Rename volume (stop users → copy → re-point → restart → delete old), Clone volume; database explorer renames
   tables/views/keys/collections and Postgres databases (only with "Allow changes").
 - Public links can **expire** (15 min … 1 week, or a date); Berth sweeps them, a systemd user timer is the backstop.
+- **Edit data in the database explorer**: click a row to open it in a side panel with every value in full (type,
+  key, NULL, pretty JSON, binary saved to a file); change values, add rows, delete rows — PostgreSQL and
+  MySQL/MariaDB by primary key; Redis strings, hashes, lists, sets, sorted sets, streams, RedisJSON, plus new key,
+  expiry and delete; MongoDB and the search engines as JSON documents. Empty or delete a table / collection / index.
+  Everything needs "Allow changes"; a row changed by someone else meanwhile is reported, never overwritten blindly.
+- **Sort and filter**: click a column header to sort, type a condition to filter — over the whole table, on the
+  server.
+- `docs/GAPS.md`: what Berth still lacks, checked page by page against Docker Desktop, Dockhand and SQL clients.
 - **Database tab** on every database container's detail page: the explorer opens right there.
 - Container list shows **"public"** and **"address"** badges next to names that are shared or have a local address.
 - **Settings → Local addresses proxy**: status, Stop, Remove, and a shortcut to Ports & sharing.
@@ -36,6 +44,15 @@ and the project uses [Semantic Versioning](https://semver.org/).
   status, exposure and Open / Start. The Berth logo is in the sidebar and on the engine-off screen.
 
 ### Fixed
+- **The database grid** looks and behaves like a SQL client: row numbers, columns sized to their content, the last
+  one filling the width, horizontal scrolling, and a card only as tall as its rows. Rows are in primary-key order
+  (they sorted as text, 1, 10, 11, 2, and moved after an edit). The first table opens by itself.
+- **No more empty space or cut-off dialogs**: Ports, Share files, SQLite, Add address, Share publicly and Pull size
+  to their content (Pull suggests popular images); container Inspect / Mounts, image, network, Disk usage and
+  Settings use two columns on large windows; list tables hug their rows.
+- MySQL ignored errors for values over 100 KB (a too-long value looked saved). Volume files: an empty folder said
+  "this image has no shell", and unknown owners showed as UNKNOWN (now their uid). An invalid CSS rule on the Send
+  files drop zone.
 - **Large values in the database explorer** ("field larger than field limit (131072)" on a Postgres table with
   big checkpoint blobs): long text is cut on the server to 4,000 characters with the full length shown, binary
   columns show their size, huge Redis strings/hashes are sampled, pages that are still too large shrink

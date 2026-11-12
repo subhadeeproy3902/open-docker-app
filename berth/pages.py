@@ -11,7 +11,7 @@ from .cli import CommandDialog, run_capture
 from .files import FileBrowser, clone_volume, export_volume, import_volume, start_volume_helper, stop_volume_helper
 from .scan import ScanDialog
 from .util import (release_on_leave, Row, ago, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
-                   fmt_rate, icon_button, label, labels, ordering, thread, detail_tag, push_detail,
+                   fmt_rate, icon_button, label, labels, ordering, thread, detail_tag, push_detail, WidePrefs,
                    toolbar_row, PageHeader, flat_page, table_card)
 
 
@@ -107,7 +107,7 @@ class TablePage(Gtk.Box):
         self.view.connect("activate", lambda _v, pos: self.on_activate(self.sorted.get_item(pos)))
         self.build_columns()
         self.stack = Gtk.Stack()
-        self.stack.add_named(table_card(self.view), "list")
+        self.stack.add_named(table_card(self.view, fit=True), "list")
         self.stack.add_named(Adw.StatusPage(title=self.empty_text[0], description=self.empty_text[1],
                                             icon_name=self.icon), "empty")
         sp = Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, width_request=32, height_request=32)
@@ -394,7 +394,7 @@ class ImageDetail(Adw.NavigationPage):
         run.connect("clicked", lambda *_: RunDialog(page.win, page.store, d).present(page.win))
         hb.pack_end(run)
         tv.add_top_bar(hb)
-        self.pp = Adw.PreferencesPage()
+        self.pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))
         tv.set_content(self.pp)
         self.set_child(tv)
         bg(self._load, done=self._fill, error=lambda e: page.win.toast(str(e)))
@@ -460,7 +460,7 @@ class ImageDetail(Adw.NavigationPage):
 
 class PullDialog(Adw.Dialog):
     def __init__(self, win, store, ref=None):
-        super().__init__(title="Pull an image", content_width=560, content_height=560)
+        super().__init__(title="Pull an image", content_width=560)
         self.win, self.store = win, store
         tv = Adw.ToolbarView()
         tv.add_top_bar(Adw.HeaderBar())
@@ -477,9 +477,20 @@ class PullDialog(Adw.Dialog):
         box.append(row)
         self.progress = Gtk.ProgressBar(show_text=True, visible=False)
         box.append(self.progress)
+        # before searching: one-click popular images instead of an empty box
+        self.popular = Adw.WrapBox(child_spacing=6, line_spacing=6)
+        self.popular.append(label("Popular:", css=["caption", "dim-label"], valign=Gtk.Align.CENTER))
+        for name in ("nginx", "postgres", "redis", "node", "python", "mysql", "mongo", "alpine", "ubuntu", "caddy"):
+            chip = Gtk.Button(label=name, tooltip_text=f"Search Docker Hub for {name}")
+            chip.add_css_class("pill-chip")
+            chip.connect("clicked", lambda _b, n=name: (self.entry.set_text(n), self.entry.grab_focus()))
+            self.popular.append(chip)
+        box.append(self.popular)
         self.results = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.results.add_css_class("boxed-list")
-        box.append(Gtk.ScrolledWindow(child=self.results, vexpand=True))
+        self.results_sw = Gtk.ScrolledWindow(child=self.results, propagate_natural_height=True, max_content_height=440,
+                                             hscrollbar_policy=Gtk.PolicyType.NEVER, visible=False)
+        box.append(self.results_sw)
         tv.set_content(box)
         self.set_child(tv)
         self._gen = 0
@@ -491,7 +502,9 @@ class PullDialog(Adw.Dialog):
         q = e.get_text().strip()
         self._gen += 1
         gen = self._gen
+        self.popular.set_visible(not q)
         if len(q) < 2 or ":" in q or "/" in q and "." in q.split("/")[0]:
+            self.results_sw.set_visible(False)
             return
 
         def done(res):
@@ -499,6 +512,7 @@ class PullDialog(Adw.Dialog):
                 return
             while (ch := self.results.get_first_child()):
                 self.results.remove(ch)
+            self.results_sw.set_visible(bool(res))
             for r in res or []:
                 name = r.get("name", "")
                 row = Adw.ActionRow(title=esc(name), subtitle=esc((r.get("description") or "")[:140]), activatable=True)
@@ -974,7 +988,7 @@ class NetworkDetail(Adw.NavigationPage):
         self.page, self.d = page, d
         tv = Adw.ToolbarView()
         tv.add_top_bar(Adw.HeaderBar())
-        self.pp = Adw.PreferencesPage()
+        self.pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))
         tv.set_content(self.pp)
         self.set_child(tv)
         self.groups = []
@@ -1372,7 +1386,7 @@ class DiskPage(Gtk.Box):
         header = PageHeader("Disk usage", "Where Docker keeps its data, and what you can safely reclaim")
         header.add(Gtk.Button(label="Measure again", tooltip_text="Ask Docker for fresh sizes")).connect("clicked", lambda *_: self.on_show())
         flat_page(tv, header)
-        self.pp = Adw.PreferencesPage()
+        self.pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))
         self.fs_group = Adw.PreferencesGroup(title="Where Docker keeps its data")
         self.pp.add(self.fs_group)
         self.cat_group = Adw.PreferencesGroup(title="Inside Docker", description="Sizes as Docker reports them. Cleaning frees space on the drive above.")

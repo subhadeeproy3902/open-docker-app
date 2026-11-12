@@ -83,8 +83,7 @@ def _left(t):
 
 class ExposeDialog(Adw.Dialog):
     def __init__(self, page, cid=None, port=None, route=None):
-        super().__init__(title="Change local address" if route else "Add a local address", content_width=520,
-                         content_height=560)
+        super().__init__(title="Change local address" if route else "Add a local address", content_width=520)
         self.page, self.win, self.store, self.editing = page, page.win, page.store, route
         if route:
             c0 = next((c for c in page.store.containers if cname(c) == route["container"]), None)
@@ -154,7 +153,7 @@ class ExposeDialog(Adw.Dialog):
 
 class ShareDialog(Adw.Dialog):
     def __init__(self, page, cid=None, port=None):
-        super().__init__(title="Share publicly", content_width=540, content_height=640)
+        super().__init__(title="Share publicly", content_width=540)
         self.page, self.win, self.store = page, page.win, page.store
         tv = Adw.ToolbarView()
         hb = Adw.HeaderBar()

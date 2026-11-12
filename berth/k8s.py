@@ -112,7 +112,7 @@ class K8sPage(Gtk.Box):
         self.view.set_model(Gtk.NoSelection(model=self.sorted))
         self.stack = Gtk.Stack(vexpand=True)
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        body.append(table_card(self.view))
+        body.append(table_card(self.view, fit=True))
         self.stack.add_named(body, "table")
         self.status = Adw.StatusPage(icon_name="network-server-symbolic")
         self.stack.add_named(self.status, "status")

@@ -23,7 +23,7 @@ class SettingsPage(Gtk.Box):
         self.win, self.store, self.s = win, store, settings
         tv = Adw.ToolbarView(vexpand=True)
         flat_page(tv, PageHeader("Settings", "Appearance, accessibility, the Docker Engine and registries"))
-        pp = WidePrefs()                                   # wider, and two columns on big screens
+        pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))                                   # wider, and two columns on big screens
         self.prefs = pp
         tv.set_content(pp)
         self.append(tv)

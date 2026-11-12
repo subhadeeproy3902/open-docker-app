@@ -67,7 +67,7 @@ def audit(screen, root):
             node["tip"] = w.get_tooltip_text() or ""
             parent = w.get_parent()
             inner = isinstance(parent, (Gtk.MenuButton, Adw.SplitButton)) or \
-                w.get_ancestor(Gtk.WindowControls) is not None
+                w.get_ancestor(Gtk.WindowControls) is not None or w.get_ancestor(Gtk.SpinButton) is not None
             if icon_only(w) and not has_tip(w) and not inner:
                 icon = w.get_icon_name() if hasattr(w, "get_icon_name") else ""
                 key = (screen, icon or "", name)
@@ -90,10 +90,38 @@ app = A.App(shot=None)
 app.set_flags(app.get_flags() | Gio.ApplicationFlags.NON_UNIQUE)
 
 
+def _children(w):
+    c = w.get_first_child()
+    while c is not None:
+        yield c
+        yield from _children(c)
+        c = c.get_next_sibling()
+
+
+def _render(widget, path):
+    from gi.repository import Gdk, Graphene, Gsk
+    w, h = widget.get_width(), widget.get_height()
+    snap = Gtk.Snapshot()
+    Gtk.WidgetPaintable.new(widget).snapshot(snap, w, h)
+    node = snap.to_node()
+    if node is None or not w or not h:
+        raise RuntimeError("nothing rendered yet")
+    r = Gsk.CairoRenderer()
+    r.realize_for_display(Gdk.Display.get_default())
+    rect = Graphene.Rect()
+    rect.init(0, 0, w, h)
+    r.render_texture(node, rect).save_to_png(path)
+    r.unrealize()
+
+
 def shot(w, name):
+    """A window, or any widget (a dialog is captured on its own)."""
     for _ in range(40):
         try:
-            w.screenshot(os.path.join(OUT, name + ".png"))
+            if hasattr(w, "screenshot"):
+                w.screenshot(os.path.join(OUT, name + ".png"))
+            else:
+                _render(w, os.path.join(OUT, name + ".png"))
             return
         except RuntimeError:
             yield 0.1
@@ -101,7 +129,7 @@ def shot(w, name):
 
 def scen():
     w = app.win
-    w.set_size_request(1600, 1000)
+    w.set_size_request(int(os.environ.get("AUDIT_W", 1600)), int(os.environ.get("AUDIT_H", 1000)))
     t = 0
     while not (w.store.up and w.store.containers) and t < 60:
         t += 1
@@ -125,7 +153,29 @@ def scen():
             det.tabs.set_visible_child_name(tab)
             yield 2
             audit(f"container-{tab}", w)
+            yield from shot(w, f"container-{tab}")
         cp.nav.pop_to_tag("list")
+    # a database container's own Database tab
+    from berth import db as _db
+    dbc0 = next((c for c in w.store.containers if c.get("State") == "running" and _db.detect(c)), None)
+    if dbc0:
+        cp.open_detail(dbc0["Id"], "database")
+        yield 6
+        audit("container-database", w)
+        yield from shot(w, "container-database")
+        cp.nav.pop_to_tag("list")
+    # the other detail pages: first row of each list
+    for key in ("images", "volumes", "networks", "builds"):
+        pg = w.pages[key]
+        w.go(key)
+        yield 2
+        if pg.model.get_n_items():
+            pg.on_activate(pg.model.get_item(0))
+            yield 3
+            audit(f"{key}-detail", w)
+            yield from shot(w, f"{key}-detail")
+            pg.nav.pop_to_tag("list")
+            yield 0.5
     # a database explorer (read-only: it only connects and lists)
     from berth import db
     dbc = next((c for c in w.store.containers if c.get("State") == "running" and db.detect(c) == "postgres"), None)
@@ -141,19 +191,73 @@ def scen():
         yield 4
         audit("database-explorer", w)
         yield from shot(w, "database-explorer")
+        ex = dp.nav.get_visible_page().get_child()
+        ex = ex if hasattr(ex, "data") else next((c for c in _children(dp.nav.get_visible_page()) if hasattr(c, "data")), None)
+        if ex is not None:
+            yield 2
+            leaves = [ex.tree_model.get_item(i).get_item().v for i in range(ex.tree_model.get_n_items())]
+            leaves = {n.label: n for n in leaves if n.leaf}
+            yield from shot(w, "database-first")                     # what opens by itself
+            if "orders" in leaves:                                     # the demo's wide table
+                ex._open(leaves["orders"])
+                yield 3
+                yield from shot(w, "database-wide")
+            if "customers" in leaves:                                  # JSON, long text, binary
+                ex._open(leaves["customers"])
+                yield 3
+            yield from shot(w, "database-data")
+            ex.data.open(2)
+            yield 3
+            audit("database-row", w)
+            yield from shot(w, "database-row")
+            ex.write_sw.set_active(True)
+            yield 1
+            yield from shot(w, "database-row-edit")
+            ex.data.split.set_show_sidebar(False)
+            ex.data.open_new()
+            yield 3
+            yield from shot(w, "database-new-row")
+            ex.data.panel.reset()
+            ex.write_sw.set_active(False)
+            yield 1
+            ex.data.split.set_show_sidebar(False)
+            ex.views.set_visible_child_name("structure")
+            yield 3
+            yield from shot(w, "database-structure")
+            ex.views.set_visible_child_name("query")
+            ex._run()
+            yield 3
+            yield from shot(w, "database-query")
         dp.nav.pop_to_tag("list")
     # dialogs
     from berth import quick, send_page, sharing_page
     dialogs = [("dialog-share", lambda: sharing_page.ShareDialog(w.pages["sharing"])),
                ("dialog-address", lambda: sharing_page.ExposeDialog(w.pages["sharing"])),
                ("dialog-send-options", lambda: send_page.OptionsDialog(w.pages["send"], [os.path.abspath(__file__)]))]
+    from berth import edit, pages, onboarding, settings_page, compose, db_page, scan
     if run:
         dialogs.append(("dialog-ports", lambda: quick.PortsDialog(w, w.store, run[0]["Id"])))
+        dialogs.append(("dialog-edit", lambda: edit.EditDialog(w, w.store, run[0]["Id"])))
+    img = next((im for im in (w.store.images or []) if im.get("RepoTags")), None)
+    if img:
+        dialogs.append(("dialog-run", lambda: pages.RunDialog(w, w.store, {"ref": img["RepoTags"][0],
+                        "repo": img["RepoTags"][0].rsplit(":", 1)[0], "tag": img["RepoTags"][0].rsplit(":", 1)[-1],
+                        "id": img["Id"]})))
+    dialogs += [("dialog-pull", lambda: pages.PullDialog(w, w.store)),
+                ("dialog-onboarding", lambda: onboarding.Onboarding(w)),
+                ("dialog-daemon-json", lambda: settings_page.DaemonJsonDialog(w)),
+                ("dialog-compose-open", lambda: compose.ComposeOpen(w, w.store)),
+                ("dialog-sqlite", lambda: db_page.SqliteDialog(w.pages["databases"]))]
     for name, make in dialogs:
-        d = make()
+        try:
+            d = make()
+        except Exception as e:
+            problems.append(f"{name}: couldn't open ({e})")
+            continue
         d.present(w)
         yield 1.5
         audit(name, d)
+        yield from shot(d, name)
         d.force_close()
         yield 0.5
     app.quit()

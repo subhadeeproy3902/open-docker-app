@@ -227,7 +227,9 @@ def docs_result(docs, note="", truncated=False):
         for k in f:
             if k not in cols:
                 cols.append(k)
-    return Result(cols, [[cap(f.get(c)) for c in cols] for f in flat], note, truncated)
+    r = Result(cols, [[cap(f.get(c)) for c in cols] for f in flat], note, truncated)
+    r.docs = docs                     # the original documents: their ids keep their type (ObjectId, number…)
+    return r
 
 
 class Backend:
@@ -244,6 +246,8 @@ class Backend:
         self.env = _env(ins)
         self.db = None
         self.version = ""
+        self.where = ""             # SQL engines: a row filter (a condition), set from the data tab
+        self.sort = None            # (column, descending) from a click on a column header
 
     # to override
     def connect(self):
@@ -286,7 +290,7 @@ class Backend:
 
     def _need_write(self, allow_write):
         if not allow_write:
-            raise DbError("Renaming changes the database. Switch on “Allow changes” first.")
+            raise DbError("This changes the database. Switch on “Allow changes” at the top first.")
 
     # helpers
     def running(self):
@@ -334,6 +338,17 @@ def _timed(fn):
 
 
 # ── PostgreSQL ──────────────────────────────────────────────────────────────────────────────────────────────────
+def _condition(text):
+    """A row filter typed by the user: one condition, never a second statement (it is checked, and Postgres runs
+    it in a read-only transaction anyway)."""
+    t = text.strip().rstrip(";").strip()
+    if t.lower().startswith("where "):
+        t = t[6:]
+    if len(_split_sql(t)) > 1:
+        raise DbError("A filter is one condition, e.g. status = 'paid' and total > 10 — not several statements")
+    return f"({t})"
+
+
 def _qi(name):
     return '"' + name.replace('"', '""') + '"'
 
@@ -353,11 +368,12 @@ class Postgres(Backend):
         self.password = None                   # read in connect(): it may live in a *_FILE secret
         self.db = e.get("POSTGRES_DB") or e.get("POSTGRESQL_DATABASE") or self.user
 
-    def _psql(self, sql, readonly=True, db=None):
+    def _psql(self, sql, readonly=True, db=None, file=None):
         env = {"PGPASSWORD": self.password or "", "PGCONNECT_TIMEOUT": "10",
-               "PGOPTIONS": "-c statement_timeout=60000" + (" -c default_transaction_read_only=on" if readonly else "")}
+               "PGOPTIONS": "-c statement_timeout=60000 -c standard_conforming_strings=on"
+                            + (" -c default_transaction_read_only=on" if readonly else "")}
         cmd = ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "--csv", "-P", f"null={NULL}", "-U", self.user,
-               "-d", db or self.db, "-c", sql]
+               "-d", db or self.db] + (["-f", file] if file else ["-c", sql])
         code, out, err, trunc = self.exec(cmd, env=env, timeout=90)
         if code != 0 and not trunc:          # when we stop reading a huge reply, psql exits non-zero: not an error
             msg = err.strip() or out.strip() or "psql failed"
@@ -421,11 +437,19 @@ class Postgres(Backend):
     def browse(self, node, offset=0, limit=ROW_LIMIT):
         """Long values are cut and binary summarised by Postgres itself, so a 59 MB blob column never travels."""
         s, t = node.ref
-        cols = self._rows(f"select a.attname, format_type(a.atttypid, a.atttypmod) from pg_attribute a "
+        cols = self._rows(f"select a.attname, format_type(a.atttypid, a.atttypmod), exists(select 1 from pg_index i "
+                          f"where i.indrelid = a.attrelid and i.indisprimary and a.attnum = any(i.indkey))::text "
+                          f"from pg_attribute a "
                           f"where a.attrelid = {_ql(_qi(s) + '.' + _qi(t))}::regclass and a.attnum > 0 "
                           f"and not a.attisdropped order by a.attnum").rows
         exprs = []
-        for name, typ in cols:
+        # a stable order (the primary key, like a SQL client): pages don't shift and an edited row stays put
+        # qualified with the table alias: a bare name would sort by the (text) display column, 1, 10, 11, 2…
+        order = ", ".join("_t." + _qi(n) for n, _t, pk in cols if pk == "true")
+        if self.sort and self.sort[0] in [c[0] for c in cols]:
+            order = f"_t.{_qi(self.sort[0])} {'desc' if self.sort[1] else 'asc'} nulls last" + (", " + order if order else "")
+        where = f" where {_condition(self.where)}" if self.where.strip() else ""
+        for name, typ, _pk in cols:
             q = _qi(name)
             if typ == "bytea":
                 exprs.append(f"case when {q} is null then null else '‹binary · ' || "
@@ -434,7 +458,8 @@ class Postgres(Backend):
                 exprs.append(f"case when length({q}::text) > {CELL_MAX} then left({q}::text, {CELL_MAX}) || '… [' || "
                              f"to_char(length({q}::text), 'FM999,999,999,999') || ' characters]' else {q}::text end as {q}")
         sel = ", ".join(exprs) or "*"
-        return self._rows(f"select {sel} from {_qi(s)}.{_qi(t)} limit {int(limit)} offset {int(offset)}")
+        return self._rows(f"select {sel} from {_qi(s)}.{_qi(t)} as _t{where}{' order by ' + order if order else ''} "
+                          f"limit {int(limit)} offset {int(offset)}")
 
     @_timed
     def structure(self, node):
@@ -541,7 +566,10 @@ class MySQL(Backend):
             self.user = e.get("MYSQL_USER") or e.get("MARIADB_USER") or "root"
             self.password = self.secret("MYSQL_PASSWORD", "MARIADB_PASSWORD")
 
-    def _run(self, sql, db=None):
+    def _run(self, sql, db=None, raw=False, file=None):
+        """raw: values exactly as stored (no cutting) — for opening one row to edit it.
+        file: run the statements in this file inside the container (fed on stdin, so the first error stops it and
+        is reported — `source` would carry on and exit 0)."""
         if self.client is None:
             self.client = self.which("mariadb", "mysql")
             if not self.client:
@@ -549,9 +577,16 @@ class MySQL(Backend):
         cmd = [self.client, "--batch", "--column-names", "--connect-timeout=10", "-u", self.user]
         if db or self.db:
             cmd.append(f"--database={db or self.db}")
-        code, out, err, trunc = self.exec(cmd + ["-e", sql], env={"MYSQL_PWD": self.password or ""}, timeout=90)
+        env = {"MYSQL_PWD": self.password or ""}
+        if file:
+            cmd, env["BERTH_F"] = ["sh", "-c", 'exec "$0" "$@" < "$BERTH_F"'] + cmd, file
+        else:
+            cmd = cmd + ["-e", sql]
+        code, out, err, trunc = self.exec(cmd, env=env, timeout=90)
         if code != 0 and not trunc:
             msg = err.strip() or "query failed"
+            if msg.startswith("-----"):             # the client echoes the statement before the error: drop it
+                msg = "\n".join(ln for ln in msg.splitlines() if ln.startswith("ERROR")) or msg[-600:]
             if "READ ONLY" in msg.upper():
                 msg += "\n\nBerth is in read-only mode. Switch on “Allow changes” to modify data."
             raise DbError(msg)
@@ -563,7 +598,8 @@ class MySQL(Backend):
         if not lines:
             return Result(note="Done.")
         cols = lines[0].split("\t")
-        rows = [[cap(_unescape_batch(v)) for v in ln.split("\t")] for ln in lines[1:]]
+        conv = _unescape_batch if raw else (lambda v: cap(_unescape_batch(v)))
+        rows = [[conv(v) for v in ln.split("\t")] for ln in lines[1:]]
         note = "The reply was too large to show completely — showing the first rows." if trunc else ""
         return Result(cols, rows[:QUERY_ROWS], note=note, truncated=trunc or len(rows) > QUERY_ROWS)
 
@@ -591,11 +627,15 @@ class MySQL(Backend):
 
     @_timed
     def browse(self, node, offset=0, limit=ROW_LIMIT):
-        cols = self._run(f"select column_name, data_type from information_schema.columns where table_schema = "
-                         f"database() and table_name = '{node.ref.replace(chr(39), chr(39) * 2)}' "
+        cols = self._run(f"select column_name, data_type, column_key from information_schema.columns where "
+                         f"table_schema = database() and table_name = '{node.ref.replace(chr(39), chr(39) * 2)}' "
                          f"order by ordinal_position").rows
         exprs = []
-        for name, typ in cols:
+        order = ", ".join(f"{_bq(node.ref)}.{_bq(n)}" for n, _t, k in cols if k == "PRI")
+        if self.sort and self.sort[0] in [c[0] for c in cols]:
+            order = f"{_bq(node.ref)}.{_bq(self.sort[0])} {'DESC' if self.sort[1] else 'ASC'}" + (", " + order if order else "")
+        where = f" where {_condition(self.where)}" if self.where.strip() else ""
+        for name, typ, _k in cols:
             q = _bq(name)
             if (typ or "").lower() in ("blob", "tinyblob", "mediumblob", "longblob", "binary", "varbinary", "bit"):
                 exprs.append(f"IF({q} IS NULL, NULL, CONCAT('‹binary · ', OCTET_LENGTH({q}), ' bytes›')) AS {q}")
@@ -603,7 +643,10 @@ class MySQL(Backend):
                 exprs.append(f"IF(CHAR_LENGTH({q}) > {CELL_MAX}, CONCAT(LEFT({q}, {CELL_MAX}), '… [', "
                              f"CHAR_LENGTH({q}), ' characters]'), {q}) AS {q}")
         sel = ", ".join(exprs) or "*"
-        return self._run(f"select {sel} from {_bq(node.ref)} limit {int(offset)}, {int(limit)}")
+        # a filter is the user's own SQL: run it in a read-only transaction like the query box
+        return self._run(("SET SESSION TRANSACTION READ ONLY; " if where else "")
+                         + f"select {sel} from {_bq(node.ref)}{where}{' order by ' + order if order else ''} "
+                         f"limit {int(offset)}, {int(limit)}")
 
     @_timed
     def structure(self, node):

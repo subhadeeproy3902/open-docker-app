@@ -149,6 +149,67 @@ def common(b, kind, node_label, min_rows):
     return node
 
 
+
+
+# ── editing (berth.db_edit): open a row in full, save, add, delete — through the same clients as browsing ──
+def _ed(b, node):
+    from berth import db_edit
+    ed = db_edit.editor_for(b)
+    r = b.browse(node, 0, 200)
+    ed.annotate(node, r)
+    return ed, r
+
+
+def _vals(ed, node, ident):
+    return {f.name: f for f in ed.fetch(node, ident)}
+
+
+def edit_sql(kind, b, node, view=None, nokey=None):
+    from berth.db_edit import DEFAULT
+    ed, r = _ed(b, node)
+    check(f"edit {kind}: rows are picked out by the primary key", r.edit_why is None and
+          [r.columns[i] for i in r.key] == ["id"], (r.edit_why, r.key))
+    pos = next(i for i, row in enumerate(r.rows) if row[r.columns.index("item")] not in (None, "new"))
+    ident = ed.ident(node, r, pos)
+    v = _vals(ed, node, ident)
+    check(f"edit {kind}: a row opens in full with types", v["id"].pk and v["item"].type and "note" in v, list(v))
+    ok, msg = raises(ed.save, node, ident, {"item": "x"}, False, contains="allow changes")
+    check(f"edit {kind}: saving needs “Allow changes”", ok, msg)
+    tricky = "it's \"quoted\" \\ back\nline two; drop table orders; --"
+    ed.save(node, ident, {"note": tricky}, True)
+    v = _vals(ed, node, ident)
+    check(f"edit {kind}: quotes, backslashes, newlines and SQL in a value are stored as text", v["note"].value == tricky,
+          repr(v["note"].value)[:80])
+    ed.save(node, ident, {"note": None}, True)
+    check(f"edit {kind}: NULL", _vals(ed, node, ident)["note"].value is None)
+    ed.save(node, ident, {"note": "NULL"}, True)
+    check(f"edit {kind}: the text “NULL” stays text", _vals(ed, node, ident)["note"].value == "NULL")
+    big = "z" * 300_000
+    ed.save(node, ident, {"note": big}, True)
+    check(f"edit {kind}: a 300 KB value is saved (through a file)", _vals(ed, node, ident)["note"].value == big)
+    ed.save(node, None, {"id": DEFAULT, "item": "new", "note": DEFAULT}, True)
+    n = b.query("select count(*) from orders where item = 'new'").rows
+    check(f"edit {kind}: add a row (untouched fields get their default)", n == [["1"]], n)
+    ok, msg = raises(ed.save, node, ident, {"id": "not a number"}, True)
+    check(f"edit {kind}: database errors come back to the user", ok and msg, msg)
+    ed.delete(node, ident, True)
+    ok, msg = raises(ed.delete, node, ident, True, contains="isn't there")
+    check(f"edit {kind}: delete, then a stale delete says the row is gone", ok, msg)
+    ok, msg = raises(ed.save, node, {"id": "1 or 1=1"}, {"note": "pwned"}, True)
+    hit = b.query("select count(*) from orders where note = 'pwned'").rows
+    check(f"edit {kind}: a key value can't widen the WHERE to other rows", int(hit[0][0]) <= 1, (msg, hit))
+    if view:
+        _ed2, rv = _ed(b, view)
+        check(f"edit {kind}: views are read-only with a reason", rv.edit_why and "view" in rv.edit_why.lower(), rv.edit_why)
+    if nokey:
+        _ed3, rn = _ed(b, nokey)
+        check(f"edit {kind}: tables without a primary key are read-only with a reason",
+              rn.edit_why and "primary key" in rn.edit_why, rn.edit_why)
+    if nokey:
+        ed.empty(nokey, True)
+        check(f"edit {kind}: empty a table", b.query("select count(*) from loose").rows == [["0"]])
+
+
 def t_postgres():
     cid = run("pg", "postgres:16-alpine", {"POSTGRES_PASSWORD": "pw", "POSTGRES_USER": "app", "POSTGRES_DB": "shop"})
     b = backend(cid)
@@ -170,13 +231,35 @@ def t_postgres():
     check("postgres: databases listed", "shop" in b.databases(), b.databases())
     q = b.query("select count(*) as n from orders")
     check("postgres: query", q.rows == [["5"]], q.rows)
+    b.query("create view v_orders as select * from orders; create table loose(a int); insert into loose values (1)",
+            allow_write=True)
+    flat = {n.label: n for sch in b.tree() for n in b.children(sch)}
+    edit_sql("postgres", b, flat["orders"], view=flat["v_orders"], nokey=flat["loose"])
+    b.sort, b.where = ("qty", True), "qty >= 2"
+    r = b.browse(flat["orders"], 0, 50)
+    qs = [int(x[r.columns.index("qty")]) for x in r.rows if x[r.columns.index("qty")] is not None]
+    check("postgres: sort by a column (numeric, descending) and filter rows", qs == sorted(qs, reverse=True) and
+          min(qs) >= 2, qs)
+    b.where = "1=1; drop table orders"
+    ok, msg = raises(b.browse, flat["orders"], 0, 5, contains="one condition")
+    check("postgres: a filter can't carry a second statement", ok, msg)
+    b.sort, b.where = None, ""
+    b.query("create table files(id int primary key, data bytea); insert into files values (1, decode(repeat('00ff', 600000), "
+            "'hex'))", allow_write=True)
+    flat = {n.label: n for sch in b.tree() for n in b.children(sch)}
+    ed, r = _ed(b, flat["files"])
+    f = _vals(ed, flat["files"], ed.ident(flat["files"], r, 0))["data"]
+    check("edit postgres: binary opens as size + preview, not editable", f.binary and f.binary[0] == 1_200_000 and
+          f.binary[1].startswith("00ff") and f.readonly, (f.binary and f.binary[0], f.readonly))
+    blob = ed.blob(flat["files"], {"id": "1"}, "data")
+    check("edit postgres: binary saved to a file in full", blob == bytes.fromhex("00ff" * 600000), len(blob))
 
 
 def t_mysql():
     cid = run("my", "mariadb:11", {"MARIADB_ROOT_PASSWORD": "pw", "MARIADB_DATABASE": "shop"})
     b = backend(cid)
     wait(cid, lambda: b.connect(), what="mariadb")
-    b.query("create table orders(id int auto_increment primary key, item varchar(50), note text);"
+    b.query("create table orders(id int auto_increment primary key, item varchar(50), note longtext);"
             "insert into orders(item, note) values ('a', NULL), ('b', 'tab\\there'), ('c', 'x'), ('d', 'NULLish');",
             allow_write=True)
     node = common(b, "mysql", "orders", 4)
@@ -186,6 +269,15 @@ def t_mysql():
     check("mysql: write refused in read-only mode", ok, msg)
     q = b.query("select count(*) n from orders")
     check("mysql: query", q.rows == [["4"]], q.rows)
+    b.query("create view v_orders as select * from orders; create table loose(a int); insert into loose values (1)",
+            allow_write=True)
+    flat = {n.label: n for n in b.tree()}
+    edit_sql("mysql", b, flat["orders"], view=flat["v_orders"], nokey=flat["loose"])
+    from berth import db_edit
+    ed, r = _ed(b, flat["orders"])
+    ok, msg = raises(ed.save, flat["orders"], ed.ident(flat["orders"], r, 0), {"item": "y" * 120_000}, True,
+                     contains="too long")
+    check("edit mysql: a value too long for its column is refused, also through a file", ok, msg)
 
 
 def t_redis():
@@ -213,6 +305,50 @@ def t_redis():
     check("redis: FLUSHALL flagged destructive", b.is_destructive("flushall"))
     b.pattern = "user:*"
     check("redis: key pattern", [n.label for n in b.tree()] == ["user:1"])
+    b.pattern = "*"
+    keys = {n.label: n for n in b.tree()}
+    ed, r = _ed(b, keys["user:1"])
+    ident = ed.ident(keys["user:1"], r, [x[0] for x in r.rows].index("name"))
+    check("edit redis: hash fields are picked out by name", r.edit_why is None and ident == {"field": "name"}, ident)
+    ed.save(keys["user:1"], ident, {"value": "Ada Lovelace"}, True)
+    ed.save(keys["user:1"], {"field": "name"}, {"field": "full_name"}, True)
+    h = b._val("HGETALL", "user:1")
+    check("edit redis: hash value saved and field renamed", h.get("full_name") == "Ada Lovelace" and "name" not in h, h)
+    ed.save(keys["user:1"], None, {"field": "age", "value": "36"}, True)
+    ok, msg = raises(ed.save, keys["user:1"], None, {"field": "age", "value": "1"}, True, contains="already exists")
+    check("edit redis: add a field; adding it twice is refused", ok, msg)
+    ed.delete(keys["user:1"], {"field": "age"}, True)
+    check("edit redis: delete a field", "age" not in b._val("HGETALL", "user:1"))
+    ed, r = _ed(b, keys["queue"])
+    ed.save(keys["queue"], {"index": "1"}, {"value": "B"}, True)
+    ed.save(keys["queue"], None, {"value": "d"}, True)
+    ed.delete(keys["queue"], {"index": "0"}, True)
+    check("edit redis: list set / append / delete by position", b._val("LRANGE", "queue", "0", "-1") == ["B", "c", "d"],
+          b._val("LRANGE", "queue", "0", "-1"))
+    ed, r = _ed(b, keys["board"])
+    ed.save(keys["board"], {"member": "alice"}, {"score": "99"}, True)
+    ed.save(keys["board"], {"member": "bob"}, {"member": "robert"}, True)
+    zs = b.query("ZRANGE board 0 -1 WITHSCORES").text
+    check("edit redis: sorted set score and member edits", "robert" in zs and "99" in zs and "bob\n" not in zs, zs)
+    ed, r = _ed(b, keys["tags"])
+    ed.save(keys["tags"], {"member": "x"}, {"member": "z"}, True)
+    check("edit redis: set member renamed", sorted(b._val("SMEMBERS", "tags")) == ["y", "z"], b._val("SMEMBERS", "tags"))
+    ed, r = _ed(b, keys["events"])
+    ed.save(keys["events"], None, {"fields": '{"kind": "view", "n": 2}'}, True)
+    check("edit redis: stream entry added", b._val("XLEN", "events") == 2)
+    ed, r = _ed(b, keys["greeting"])
+    ttl0 = int(b._val("TTL", "greeting"))
+    ed.save(keys["greeting"], {}, {"value": "hi\nthere"}, True)
+    check("edit redis: string saved and its expiry kept", b._val("GET", "greeting") == "hi\nthere"
+          and int(b._val("TTL", "greeting")) > 0 and ttl0 > 0)
+    ed.save(keys["greeting"], {}, {"value": "q" * 300_000}, True)
+    check("edit redis: 300 KB string saved (through a file)", int(b._val("STRLEN", "greeting")) == 300_000)
+    ed.expire(keys["greeting"], None, True)
+    check("edit redis: expiry removed", int(b._val("TTL", "greeting")) == -1)
+    ed.new_key("fresh", "hash", "v1", True)
+    check("edit redis: new key", b._val("HGET", "fresh", "field") == "v1")
+    ed.drop(db.Node("fresh", "key", "fresh"), True)
+    check("edit redis: key deleted", int(b._val("EXISTS", "fresh")) == 0)
 
 
 def t_mongo():
@@ -238,6 +374,25 @@ def t_mongo():
     ok, msg = raises(b.query, "db.orders.drop()", contains="read-only")
     check("mongo: shell needs Allow changes", ok, msg)
     check("mongo: drop() flagged destructive", b.is_destructive("db.orders.drop()"))
+    ed, r = _ed(b, node)
+    check("edit mongo: documents are picked out by _id", r.edit_why is None and r.key == [r.columns.index("_id")],
+          r.edit_why)
+    pos = [row[r.columns.index("item")] for row in r.rows].index("a")
+    ident = ed.ident(node, r, pos)
+    doc = json.loads(_vals(ed, node, ident)["document"].value)
+    check("edit mongo: a document opens as JSON", doc.get("item") == "a" and "$oid" in json.dumps(doc["_id"]), doc)
+    doc["qty"] = 42
+    doc["note"] = "it's \"fine\"\n$where"
+    ed.save(node, ident, {"document": json.dumps(doc)}, True)
+    d2 = json.loads(_vals(ed, node, ident)["document"].value)
+    check("edit mongo: replace the document", d2["qty"] == 42 and d2["note"] == doc["note"], d2)
+    ok, msg = raises(ed.save, node, ident, {"document": "{not json"}, True, contains="json")
+    check("edit mongo: invalid JSON is refused before sending", ok, msg)
+    ed.save(node, None, {"document": '{"item": "z", "big": "' + "w" * 200_000 + '"}'}, True)
+    check("edit mongo: insert (a 200 KB document goes through a file)", len(b.browse(node).rows) == 4)
+    ed.delete(node, ident, True)
+    ok, msg = raises(ed.delete, node, ident, True, contains="isn't there")
+    check("edit mongo: delete, then a stale delete says it's gone", ok, msg)
 
 
 def http_seed(b, method, path, body=None):
@@ -259,6 +414,20 @@ def t_opensearch():
     ok, msg = raises(b.query, "DELETE /products", contains="read-only")
     check("opensearch: DELETE refused in read-only mode", ok, msg)
 
+    node = next(n for n in b.tree() if n.label == "products")
+    ed, r = _ed(b, node)
+    check("edit opensearch: documents are picked out by _id", r.edit_why is None, r.edit_why)
+    ident = ed.ident(node, r, 0)
+    doc = json.loads(_vals(ed, node, ident)["document"].value)
+    doc["edited"] = "yes"
+    ed.save(node, ident, {"document": json.dumps(doc)}, True)
+    check("edit opensearch: save a document", json.loads(_vals(ed, node, ident)["document"].value).get("edited") == "yes")
+    ed.save(node, None, {"document": json.dumps({"name": "new", "price": 5})}, True)
+    ed.delete(node, ident, True)
+    time.sleep(1)
+    r2 = b.browse(node)
+    check("edit opensearch: add one and delete one", len(r2.rows) == len(r.rows), (len(r.rows), len(r2.rows)))
+
 
 def t_typesense():
     cid = run("ts", "typesense/typesense:27.1", cmd=["--data-dir", "/tmp", "--api-key=xyz", "--enable-cors"])
@@ -270,6 +439,20 @@ def t_typesense():
         http_seed(b, "POST", "/collections/books/documents", {"id": str(i), "title": f"Book {i}", "year": 2000 + i})
     common(b, "typesense", "books", 3)
 
+    node = next(n for n in b.tree() if n.label == "books")
+    ed, r = _ed(b, node)
+    check("edit typesense: documents are picked out by id", r.edit_why is None, r.edit_why)
+    ident = ed.ident(node, r, 0)
+    doc = json.loads(_vals(ed, node, ident)["document"].value)
+    doc["edited"] = "yes"
+    ed.save(node, ident, {"document": json.dumps(doc)}, True)
+    check("edit typesense: save a document", json.loads(_vals(ed, node, ident)["document"].value).get("edited") == "yes")
+    ed.save(node, None, {"document": json.dumps({"id": "9", "title": "New", "year": 2024})}, True)
+    ed.delete(node, ident, True)
+    time.sleep(1)
+    r2 = b.browse(node)
+    check("edit typesense: add one and delete one", len(r2.rows) == len(r.rows), (len(r.rows), len(r2.rows)))
+
 
 def t_meili():
     cid = run("meili", "getmeili/meilisearch:v1.11", {"MEILI_MASTER_KEY": "a-long-master-key-123456", "MEILI_ENV": "development"})
@@ -278,6 +461,20 @@ def t_meili():
     t = http_seed(b, "POST", "/indexes/movies/documents", [{"id": i, "title": f"Movie {i}"} for i in range(3)])
     wait(cid, lambda: http_seed(b, "GET", f"/tasks/{t['taskUid']}")["status"] == "succeeded", 60, "meili task")
     common(b, "meilisearch", "movies", 3)
+
+    node = next(n for n in b.tree() if n.label == "movies")
+    ed, r = _ed(b, node)
+    check("edit meilisearch: documents are picked out by id", r.edit_why is None, r.edit_why)
+    ident = ed.ident(node, r, 0)
+    doc = json.loads(_vals(ed, node, ident)["document"].value)
+    doc["edited"] = "yes"
+    ed.save(node, ident, {"document": json.dumps(doc)}, True)
+    check("edit meilisearch: save a document", json.loads(_vals(ed, node, ident)["document"].value).get("edited") == "yes")
+    ed.save(node, None, {"document": json.dumps({"id": 9, "title": "New"})}, True)
+    ed.delete(node, ident, True)
+    time.sleep(1)
+    r2 = b.browse(node)
+    check("edit meilisearch: add one and delete one", len(r2.rows) == len(r.rows), (len(r.rows), len(r2.rows)))
 
 
 def t_sqlite():

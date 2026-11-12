@@ -524,6 +524,55 @@ def scenario(app):
         ok = yield from wait_for(lambda: getattr(getattr(det, "explorer", None), "nodes", None) is not None, 60)
         check("Database tab on the container opens the explorer", ok)
         cp.nav.pop_to_tag("list")
+        # the explorer as a user drives it: open a table, click a row, edit it, save; sort; filter
+        win.go("databases")
+        dp.open(pg["Id"])
+        ok = yield from wait_for(lambda: dp.nav.get_visible_page().get_tag() != "list", 30)
+        ex = dp.nav.get_visible_page().get_child()
+        ok = yield from wait_for(lambda: getattr(ex, "nodes", None) and ex.data.result is not None, 60)
+        check("Explorer opens the first table by itself", ok and ex.node is not None, getattr(ex.node, "label", None))
+        node = next((k for n in ex.nodes for k in ([n] if n.leaf else ex.b.children(n)) if k.label == "customers"),
+                    None)
+        if node is None:
+            check("demo table customers present", False)
+        else:
+            ex._open(node)
+            ok = yield from wait_for(lambda: ex.data.result is not None and ex.data.result.rows
+                                     and ex.data.result.columns and "email" in ex.data.result.columns, 30)
+            r = ex.data.result
+            check("Rows are in key order (1, 2, 3 — not 1, 10, 11)", [x[0] for x in r.rows[:3]] == ["1", "2", "3"],
+                  [x[0] for x in r.rows[:3]])
+            ex.data.open(1)
+            ok = yield from wait_for(lambda: ex.data.panel.fields and not getattr(ex.data.panel, "listed", True), 30)
+            names = [f.name for f in ex.data.panel.fields]
+            check("Clicking a row opens it in full in the side panel", ok and "profile" in names and
+                  ex.data.split.get_show_sidebar(), names)
+            check("The panel is read-only until “Allow changes”", not ex.data.panel.save.get_visible())
+            ex.write_sw.set_active(True)
+            yield 0.5
+            w = ex.data.panel.widgets[names.index("name")]
+            w["view"].get_buffer().set_text("Edited by the UI test")
+            check("Editing a field enables Save", ex.data.panel.save.get_sensitive())
+            ex.data.panel._save()
+            b2 = dbm.open_backend(eng, eng.inspect(pg["Id"]))
+            yield 2
+            r2 = yield from _in_thread(lambda: (b2.connect(), b2.query("select name from customers where id = 2"))[1],
+                                       60)
+            ok = r2.rows == [["Edited by the UI test"]]
+            check("Save writes the change to the database", ok)
+            yield from _in_thread(lambda: b2.query("update customers set name = 'Customer 2' where id = 2",
+                                                   allow_write=True), 60)
+            ex.write_sw.set_active(False)
+            ex.sort_by("id", True)
+            ok = yield from wait_for(lambda: ex.data.result and ex.data.result.rows and
+                                     ex.data.result.rows[0][0] == "64", 20)
+            check("A header click sorts the whole table (server side)", ok)
+            ex.wfilter.set_text("country = 'DE'")
+            ex._apply_where()
+            ok = yield from wait_for(lambda: ex.data.result and ex.data.result.rows and all(
+                x[ex.data.result.columns.index("country")] == "DE" for x in ex.data.result.rows), 20)
+            check("The row filter searches the table", ok)
+        dp.nav.pop_to_tag("list")
 
     # 12. engine switching (Settings → Connected engine)
     sp = win.pages["settings"]

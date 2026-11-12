@@ -1,6 +1,7 @@
 """Small shared helpers: background work, formatting, settings, dialogs."""
 import json
 import os
+import weakref
 import shutil
 import subprocess
 import sys
@@ -397,11 +398,16 @@ def flat_page(tv, header, toolbar=None):
     return hb
 
 
-def table_card(child):
-    """A table inside a rounded card with page margins (instead of running edge to edge)."""
+def table_card(child, fit=False):
+    """A table inside a rounded card with page margins (instead of running edge to edge).
+    fit: the card is only as tall as its rows (and scrolls once they reach the bottom of the page) — for lists,
+    so a short list doesn't sit in a tall empty box."""
     sw = child if isinstance(child, Gtk.ScrolledWindow) else Gtk.ScrolledWindow(child=child)
-    sw.set_vexpand(True)
-    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, css_classes=["table-card"], vexpand=True, overflow=Gtk.Overflow.HIDDEN)
+    sw.set_vexpand(not fit)
+    if fit:
+        sw.set_propagate_natural_height(True)
+    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, css_classes=["table-card"], vexpand=not fit,
+                   valign=Gtk.Align.START if fit else Gtk.Align.FILL, overflow=Gtk.Overflow.HIDDEN)
     card.append(sw)
     return card
 
@@ -492,29 +498,47 @@ def set_columns(flowbox, n):
     flowbox.set_max_children_per_line(n)
 
 
+WIDE = weakref.WeakSet()
+
+
 class WidePrefs(Gtk.ScrolledWindow):
     """Like Adw.PreferencesPage, but it uses big screens: a wider column that grows with the size class, and two
     columns of groups on 2xl / 3xl instead of one narrow strip in the middle."""
 
-    def __init__(self):
+    def __init__(self, two_at=("2xl", "3xl")):
+        """two_at: the size classes that get two columns (detail pages use them from lg up)."""
         super().__init__(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
-        self.groups = []
+        self.groups, self.two_at = [], two_at
         self.clamp = Adw.Clamp(maximum_size=720, tightening_threshold=600)
         self.cols = Gtk.Box(spacing=32, homogeneous=True, css_classes=["wide-prefs"])
         self.clamp.set_child(self.cols)
         self.set_child(self.clamp)
         self.n = 0
+        self.want = 1
         self._layout(1)
+        WIDE.add(self)                       # the window tells every WidePrefs when its size class changes
+        self.connect("map", lambda *_: self.on_size(getattr(self.get_root(), "size_class", "md") or "md"))
 
     def add(self, group):
         self.groups.append(group)
-        self._layout(self.n or 1, force=True)
+        self._layout(self.want, force=True)
+
+    def remove(self, group):
+        if group in self.groups:
+            self.groups.remove(group)
+        if group.get_parent():
+            group.get_parent().remove(group)
+        self._layout(self.want, force=True)
 
     def on_size(self, n):
-        self.clamp.set_maximum_size(per_size(n, 720, 760, 820, 900, 1480, 1760))
-        self._layout(2 if n in ("2xl", "3xl") else 1)
+        two = n in self.two_at
+        self.clamp.set_maximum_size(per_size(n, 720, 760, 820, 900, 1480, 1760) if not two or n in ("2xl", "3xl")
+                                    else per_size(n, 720, 760, 1180, 1400, 1480, 1760))
+        self.want = 2 if two else 1
+        self._layout(self.want)
 
     def _layout(self, n, force=False):
+        n = max(1, min(n, len(self.groups)))          # one group: one column, never an empty half
         if n == self.n and not force:
             return
         self.n = n

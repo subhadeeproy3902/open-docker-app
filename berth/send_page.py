@@ -38,7 +38,7 @@ class OptionsDialog(Adw.Dialog):
 
     def __init__(self, page, paths=None, receive_dir=None):
         title = "Receive files from a phone" if receive_dir else "Share files"
-        super().__init__(title=title, content_width=480, content_height=520)
+        super().__init__(title=title, content_width=480)
         self.page, self.paths, self.receive_dir = page, paths or [], receive_dir
         tv = Adw.ToolbarView()
         hb = Adw.HeaderBar()

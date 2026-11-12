@@ -178,6 +178,9 @@ class Window(Adw.ApplicationWindow):
         for p in self.pages.values():
             if hasattr(p, "on_size"):
                 p.on_size(n)
+        from .util import WIDE
+        for w in list(WIDE):                       # detail pages and dialogs with wide forms
+            w.on_size(n)
 
     def _sidebar_header(self, row, before):
         title = GROUPS.get(row.key)

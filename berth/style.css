@@ -148,6 +148,23 @@ row.monospace-subtitle .subtitle { font-family: monospace; font-size: 0.85em; }
 .db-editor { font-size: 0.95em; background: none; }
 .db-grid > listview > row > cell { padding: 4px var(--cell-x); }
 .db-grid > header > button { text-transform: none; letter-spacing: 0; font-family: monospace; font-size: 0.85em; }
+.db-grid .db-rownum { font-size: 0.85em; padding-right: 2px; }
+.db-grid > listview > row:selected { background: alpha(@accent_bg_color, 0.16); }
+.db-null { color: alpha(currentColor, 0.45); font-style: italic; }
+.db-data-bar { min-height: 34px; }
+.db-split > widget.sidebar-pane, .db-split > .sidebar-pane { background: none; }
+.db-record { margin-left: 12px; border-radius: 12px; background: alpha(currentColor, 0.025);
+             border: 1px solid alpha(currentColor, 0.09); }
+.db-record-head { padding: 12px 10px 10px 16px; border-bottom: 1px solid alpha(currentColor, 0.07); }
+.db-record-body { padding: 14px 16px 18px 16px; }
+.db-record-foot { padding: 10px 12px; border-top: 1px solid alpha(currentColor, 0.07); min-height: 36px; }
+.db-field-name { font-weight: 600; }
+.db-pill { font-size: 0.75em; font-weight: 700; padding: 1px 7px; border-radius: 99px;
+           background: alpha(@accent_bg_color, 0.16); color: @accent_color; }
+.db-value-frame { border-radius: 8px; background: alpha(currentColor, 0.045); border: 1px solid alpha(currentColor, 0.08); }
+.db-value-frame:focus-within { border-color: alpha(@accent_bg_color, 0.7); }
+textview.db-value, textview.db-value > text { background: none; }
+.db-value.binary { padding: 10px 12px; border-radius: 8px; background: alpha(currentColor, 0.045); }
 .write-toggle { padding: 3px 10px; border-radius: 99px; background: alpha(currentColor, 0.06); }
 .write-toggle.on { background: alpha(#e01b24, 0.16); color: #c01c28; }
 .write-toggle.on label { font-weight: 700; }
@@ -159,7 +176,7 @@ row.mono-title .title { font-family: monospace; }
 .statusbar-share { color: #c88800; font-weight: 650; font-size: 0.85em; min-height: 20px; padding: 0 8px; margin-left: 8px; }
 
 /* ── send files ───────────────────────────────────────────────────────────── */
-.send-drop { margin: 18px auto; padding: 40px 36px 30px 36px; border-radius: 22px; max-width: 760px;
+.send-drop { margin: 18px 0; padding: 40px 36px 30px 36px; border-radius: 22px;
              border: 2px dashed alpha(currentColor, 0.16); background: alpha(currentColor, 0.02); }
 .send-drop-title { font-size: 1.45em; font-weight: 750; margin-top: 6px; }
 .send-logo { -gtk-icon-shadow: 0 6px 18px alpha(black, 0.18); }
@@ -200,3 +217,4 @@ tooltip > box { padding: 6px 10px; }
 tooltip label { font-size: 0.92em; }
 .sharing-page .table-card { margin: 0; }           /* body padding already sets the edges: align with the tiles */
 .name-badge { font-size: 0.72em; padding: 0 7px; }
+.pill-chip { padding: 2px 12px; min-height: 26px; border-radius: 99px; font-weight: 500; }

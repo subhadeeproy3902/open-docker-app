@@ -61,7 +61,7 @@ class PortsDialog(Adw.Dialog):
     """Change the published ports of a container (recreates it; volumes and data are kept)."""
 
     def __init__(self, win, store, cid):
-        super().__init__(title="Change ports", content_width=560, content_height=560)
+        super().__init__(title="Change ports", content_width=560)
         from .edit import values_from
         self.win, self.store, self.cid = win, store, cid
         tv = Adw.ToolbarView()

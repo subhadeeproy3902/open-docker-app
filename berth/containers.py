@@ -17,7 +17,7 @@ from .logs import LogsExplorer
 from .util import (release_on_leave, Row, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
                    fmt_rate, icon_button, label, labels, open_uri, short_status, spawn, state_of,
                    terminal_argv, themed, thread, detail_tag, push_detail, toolbar_row,
-                   run_in_terminal, PageHeader, flat_page, table_card)
+                   run_in_terminal, PageHeader, flat_page, table_card, WidePrefs)
 
 try:
     gi.require_version("Vte", "3.91")
@@ -437,7 +437,7 @@ class ContainersPage(Gtk.Box):
         self.view.add_css_class("berth-table")
         self.view.connect("activate", self._on_activate)
         self._columns()
-        sw = table_card(self.view)
+        sw = table_card(self.view, fit=True)
         self.stack = Gtk.Stack()
         self.stack.add_named(sw, "list")
         self.empty = Adw.StatusPage(icon_name="view-grid-symbolic")
@@ -932,7 +932,7 @@ class ContainerDetail(Adw.NavigationPage):
     # inspect
     def _build_inspect(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.insp = Adw.PreferencesPage()
+        self.insp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))
         box.append(self.insp)
         self.insp.set_vexpand(True)
         self.reveal = False
@@ -1003,7 +1003,7 @@ class ContainerDetail(Adw.NavigationPage):
 
     # mounts
     def _build_mounts(self):
-        pp = Adw.PreferencesPage()
+        pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))
         g = Adw.PreferencesGroup(title="Mounts", description="Folders and volumes this container reads and writes.")
         pp.add(g)
 

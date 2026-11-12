@@ -12,6 +12,10 @@ def _prefs():
         return {}
 
 
+if "--run-backups" in sys.argv:                          # scheduled backups, no window (systemd timer, cron, …)
+    from berth.backups import cli
+    sys.exit(cli())
+
 if _prefs().get("software"):
     os.environ.setdefault("GSK_RENDERER", "cairo")      # no GPU at all
 

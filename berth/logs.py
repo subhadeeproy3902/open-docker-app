@@ -588,6 +588,13 @@ class LogsPage(Gtk.Box):
         if cur in names:
             self.picker.set_selected(names.index(cur))
 
+    def show_project(self, project):
+        """Open the page on one Compose stack's logs (from the Stacks page)."""
+        self._choices()
+        names = [n for n, *_ in self.choices]
+        if f"Stack · {project}" in names:
+            self.picker.set_selected(names.index(f"Stack · {project}"))
+
     def _sources(self):
         if not self.choices:
             return []

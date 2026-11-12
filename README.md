@@ -112,9 +112,16 @@ arrives; there are no animations or timers while idle. A *Software rendering* sw
 | <img src="docs/screenshots/files-editor-light.png" alt="File editor"> **Files** — browse, view and **edit** files in running containers and in volumes; upload, download, rename, delete. | <img src="docs/screenshots/container-stats-dark.png" alt="Container stats"> **Per-container stats** — CPU, memory, network and disk graphs with hover values. |
 | <img src="docs/screenshots/images-dark.png" alt="Images"> **Images** — in use / unused / dangling, Docker Hub search & pull with progress, run with ports/env/volumes, vulnerability scan, tag, push, save / load. | <img src="docs/screenshots/settings-light.png" alt="Settings"> **Settings** — light / dark / system theme, **accessibility** (text size 85–150 %, compact / comfortable / spacious density, stronger borders and contrast, larger icons, reduce motion), resource saver, engine switcher, registry sign-in, `daemon.json` editor, optional tray icon. |
 
-| <img src="docs/screenshots/databases-dark.png" alt="Database explorer"> **Databases** — browse and query **PostgreSQL, MySQL / MariaDB, Redis / Valkey, MongoDB, Vespa, OpenSearch / Elasticsearch, Typesense, Meilisearch** and SQLite files in your containers: tables / keys / collections / indices, paged data, structure and indexes, a query console with history, export to CSV / JSON / Markdown. No drivers and no extra ports (Berth uses the client inside the image), **read-only unless you switch on “Allow changes”**. | <img src="docs/screenshots/sharing-light.png" alt="Ports and sharing"> **Ports & sharing** — give a container a friendly address like `https://shop.localhost` (one small local proxy, on 127.0.0.1 only), **share a port publicly** with a Cloudflare Tunnel link (no account needed; stops when Berth quits unless you keep it), and see every published port, with a warning on the ones open to your whole network. |
+| <img src="docs/screenshots/databases-dark.png" alt="Database explorer"> **Databases** — browse and query **PostgreSQL, MySQL / MariaDB, Redis / Valkey, MongoDB, Vespa, OpenSearch / Elasticsearch, Typesense, Meilisearch** and SQLite files in your containers: tables / keys / collections / indices, paged data, structure and indexes, a query console with history, **edit rows, keys and documents** (click a row to open it in full, double-click a cell), sort and filter on the server, export or import a whole table as CSV / JSON. No drivers and no extra ports (Berth uses the client inside the image), **read-only unless you switch on “Allow changes”**. | <img src="docs/screenshots/sharing-light.png" alt="Ports and sharing"> **Ports & sharing** — give a container a friendly address like `https://shop.localhost` (one small local proxy, on 127.0.0.1 only), **share a port publicly** with a Cloudflare Tunnel link (no account needed; stops when Berth quits unless you keep it), and see every published port, with a warning on the ones open to your whole network. |
 
 **Everything else**
+
+- **Backups**: back up a database (pg_dump, mysqldump, mongodump, Redis RDB) or a volume now or on a schedule, keep the newest few, restore with one click.
+- **Stacks**: every Compose project — also ones taken down — with up, down, restart, pull & recreate, logs; a **Compose check** catches port clashes, unset variables and missing files before you run it.
+- **Search everything** with <kbd>Ctrl</kbd>+<kbd>K</kbd> (<kbd>⌘</kbd>+<kbd>K</kbd> on macOS): containers, stacks, images, volumes, networks, databases, pages and tasks.
+- **Notifications** when a container crashes, runs out of memory or turns unhealthy, or a backup fails.
+- **Images**: build from a folder with a Dockerfile, see which tags have a newer version, update and recreate their containers in one click.
+- **Remote engines over SSH** (`ssh://user@host`, your SSH keys) next to local sockets and `tcp://`.
 
 - **Containers** grouped by Compose project; start / stop / restart / pause / delete one container or a whole stack; ports open in your browser.
 - **Container details**: Logs · Inspect (environment values hidden until you ask) · Mounts · **Exec** (built-in terminal with VTE) · Files · Stats.
@@ -125,7 +132,7 @@ arrives; there are no animations or timers while idle. A *Software rendering* sw
 - **Builds**: build history with status, steps, cache hits, duration and full logs; build cache with one-click clearing.
 - **Disk usage**: how full the drive holding Docker's data is, and what is reclaimable.
 - **Kubernetes**: pods, deployments, services and nodes for any kubeconfig context; logs, shell, describe, scale, rollout restart, port-forward, cordon, **edit YAML and apply**; create / delete local clusters with kind.
-- **Engines**: Docker (system / rootless), Podman, `docker context`s, remote `tcp://` engines; Docker Desktop, Colima, OrbStack and Rancher Desktop sockets on macOS.
+- **Engines**: Docker (system / rootless), Podman, `docker context`s, remote `tcp://` and `ssh://` engines; Docker Desktop, Colima, OrbStack and Rancher Desktop sockets on macOS.
 - **Registries**: sign in to Docker Hub or any registry (stored by Docker's own credential store).
 - **Tray icon** (optional, off by default).
 
@@ -213,11 +220,14 @@ sh scripts/install.sh --uninstall      # or: make uninstall-user   ·   flatpak 
 
 | Keys | Action |
 |---|---|
+| <kbd>Ctrl</kbd>+<kbd>K</kbd> | Go to anything — a container, stack, image, page or task |
 | <kbd>Ctrl</kbd>+<kbd>F</kbd> | Search the current page |
-| <kbd>Ctrl</kbd>+<kbd>1</kbd> … <kbd>9</kbd> | Containers · Images · Volumes · Networks · Logs · Resource usage · Disk usage · Builds · Build cache |
+| <kbd>Ctrl</kbd>+<kbd>1</kbd> … <kbd>9</kbd> | Containers · Stacks · Images · Volumes · Networks · Backups · Databases · Ports & sharing · Send files |
 | <kbd>Ctrl</kbd>+<kbd>,</kbd> | Settings |
 | <kbd>Ctrl</kbd>+<kbd>S</kbd> | Save (file and compose editors) |
 | <kbd>Ctrl</kbd>+<kbd>Q</kbd> | Quit |
+
+On macOS use <kbd>⌘</kbd> instead of <kbd>Ctrl</kbd>.
 
 ## FAQ
 

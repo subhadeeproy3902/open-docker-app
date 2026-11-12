@@ -422,11 +422,42 @@ class ContainersPage(Gtk.Box):
         self.run_filter = run
         run.connect("notify::active-name", lambda g, *_: self._on_filter(g.get_active_name()))
         exp = icon_button("view-list-symbolic", "Expand / collapse all stacks", self._toggle_all, css=("flat",))
+        # selection mode: tick several containers (or whole stacks) and start / stop / restart / remove them at once
+        self.selecting, self.picked = False, set()
+        self.sel_btn = Gtk.ToggleButton(icon_name="object-select-symbolic", valign=Gtk.Align.CENTER,
+                                        tooltip_text="Select several containers (start, stop, restart or remove "
+                                                     "them together)")
+        self.sel_btn.add_css_class("flat")
+        self.sel_btn.connect("toggled", lambda b: self._select_mode(b.get_active()))
         cmp = Gtk.Button(label="Run Compose file…", tooltip_text="Start a stack from a compose.yaml")
         cmp.add_css_class("suggested-action")
         cmp.connect("clicked", lambda *_: compose.ComposeOpen(self.win, self.store).present(self.win))
         self.wtitle.add(cmp)
-        flat_page(tv, self.wtitle, toolbar_row(self.search, run, Gtk.Box(hexpand=True), exp))
+        flat_page(tv, self.wtitle, toolbar_row(self.search, run, Gtk.Box(hexpand=True), exp, self.sel_btn))
+        bar = Gtk.ActionBar()
+        self.sel_label = label("", css=["heading"])
+        bar.pack_start(self.sel_label)
+        allb = Gtk.Button(label="All", tooltip_text="Select every container shown")
+        allb.add_css_class("flat")
+        allb.connect("clicked", lambda *_: self._pick_all(True))
+        noneb = Gtk.Button(label="None", tooltip_text="Clear the selection")
+        noneb.add_css_class("flat")
+        noneb.connect("clicked", lambda *_: self._pick_all(False))
+        bar.pack_start(allb)
+        bar.pack_start(noneb)
+        self.bulk_btns = []
+        for verb, lbl, tip in (("remove", "Remove", "Remove the selected containers (running ones are stopped first)"),
+                               ("restart", "Restart", "Restart the selected containers"),
+                               ("stop", "Stop", "Stop the selected containers"),
+                               ("start", "Start", "Start the selected containers")):
+            b = Gtk.Button(label=lbl, tooltip_text=tip)
+            if verb == "remove":
+                b.add_css_class("destructive-action")
+            b.connect("clicked", lambda *_a, v=verb: self._bulk(v))
+            bar.pack_end(b)
+            self.bulk_btns.append(b)
+        self.sel_bar = Gtk.Revealer(child=bar, transition_type=Gtk.RevealerTransitionType.SLIDE_UP, reveal_child=False)
+        tv.add_bottom_bar(self.sel_bar)
 
         # list
         self.root = Gio.ListStore(item_type=Row)
@@ -482,6 +513,26 @@ class ContainersPage(Gtk.Box):
 
     # ── columns ──
     def _columns(self):
+        def pick_setup():
+            cb = Gtk.CheckButton(valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
+            cb.binding = False
+            cb.connect("toggled", lambda b: not b.binding and b.row is not None and self._pick(b.row, b.get_active()))
+            cb.row = None
+            return cb
+
+        def pick_bind(w, row, _tr):
+            w.binding = True
+            w.row = row
+            if row.kind == "project":
+                kids = [c for c in self._children_of(row)]
+                w.set_active(bool(kids) and all(k.key in self.picked for k in kids))
+                w.set_inconsistent(any(k.key in self.picked for k in kids) and not w.get_active())
+            else:
+                w.set_inconsistent(False)
+                w.set_active(row.key in self.picked)
+            w.set_tooltip_text("Select the whole stack" if row.kind == "project" else "Select")
+            w.binding = False
+
         def col(title, setup, bind, expand=False, width=-1):
             def b(w, tree_row, _li):
                 disconnect_rows(w)
@@ -498,6 +549,8 @@ class ContainersPage(Gtk.Box):
         def name_bind(w, row, tr):
             w.set_list_row(tr)
             w.update(row, self)
+        self.col_pick = col("", pick_setup, pick_bind, width=44)
+        self.col_pick.set_visible(False)
         col("Name", NameCell, name_bind, expand=True)
         self.col_image = col("Image", lambda: TextCell(["monospace", "dim-label"]),
             lambda w, r, _t: (w.set_text(r.data.get("Image", "") if r.kind == "container" else ""),
@@ -650,6 +703,85 @@ class ContainersPage(Gtk.Box):
         self._remember_expansion()
         self.settings["expanded"] = self.expanded
 
+    # ── selection mode ──
+    def _children_of(self, row):
+        ch = getattr(row, "children", None)
+        return [ch.get_item(i) for i in range(ch.get_n_items())] if ch is not None else []
+
+    def _select_mode(self, on):
+        self.selecting = on
+        if not on:
+            self.picked.clear()
+        self.col_pick.set_visible(on)
+        self.sel_bar.set_reveal_child(on)
+        self._sync_picked()
+
+    def _pick(self, row, on):
+        keys = [k.key for k in self._children_of(row)] if row.kind == "project" else [row.key]
+        (self.picked.update if on else self.picked.difference_update)(keys)
+        self._sync_picked()
+
+    def _pick_all(self, on):
+        if on:
+            self.picked = {c["Id"] for c in self.store.containers if self._visible_container(c)}
+        else:
+            self.picked.clear()
+        self._sync_picked()
+
+    def _visible_container(self, c):
+        return c["Id"] in self.items
+
+    def _sync_picked(self):
+        self.picked &= {c["Id"] for c in self.store.containers}          # gone containers drop out
+        n = len(self.picked)
+        self.sel_label.set_text(f"{n} selected" if n else "Tick containers or stacks")
+        for b in self.bulk_btns:
+            b.set_sensitive(n > 0)
+        for r in list(self.items.values()) + list(self.groups.values()):
+            r.emit("changed")
+
+    def _bulk(self, verb):
+        ids = list(self.picked)
+        names = [cname(self.store.by_id(i)) for i in ids if self.store.by_id(i)]
+        if not ids:
+            return
+        e = self.store.engine
+
+        def work():
+            fails = []
+            for cid in ids:
+                try:
+                    if verb == "remove":
+                        e.remove_container(cid, force=True)
+                    else:
+                        e.action(cid, verb)
+                except Exception as ex:          # one failure must not stop the rest
+                    fails.append(f"{cname(self.store.by_id(cid) or {'Names': [cid[:12]]})}: {ex}")
+            return fails
+
+        def done(fails):
+            word = {"start": "Started", "stop": "Stopped", "restart": "Restarted", "remove": "Removed"}[verb]
+            ok = len(ids) - len(fails)
+            self.win.toast(f"{word} {ok} of {len(ids)}" + (f" — {fails[0][:120]}" if fails else ""))
+            if verb == "remove":
+                self.picked.clear()
+            self.store.refresh("containers")
+            self._sync_picked()
+
+        def go():
+            self.win.toast(f"{verb.capitalize()}ing {len(ids)} container{'s' if len(ids) > 1 else ''}…"
+                           if verb != "stop" else f"Stopping {len(ids)}…")
+            bg(work, done=done, error=lambda ex: self.win.toast(str(ex)))
+        if verb in ("remove", "stop"):
+            listing = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+            confirm(self.win, f"{'Remove' if verb == 'remove' else 'Stop'} {len(ids)} container"
+                    f"{'s' if len(ids) > 1 else ''}?",
+                    esc(listing) + ("\n\nRunning ones are stopped first. Volumes and their data are kept."
+                                    if verb == "remove" else ""),
+                    "Remove" if verb == "remove" else "Stop", go)
+        else:
+            go()
+
     def _toggle_all(self):
         self._remember_expansion()
         target = not any(self.expanded.values())
@@ -706,6 +838,10 @@ class ContainersPage(Gtk.Box):
         tr = self.tree.get_row(pos)
         it = tr.get_item() if tr else None
         if not it:
+            return
+        if self.selecting:                               # in selection mode a click ticks the row
+            kids = self._children_of(it) if it.kind == "project" else [it]
+            self._pick(it, not all(k.key in self.picked for k in kids))
             return
         if it.kind == "project":
             tr.set_expanded(not tr.get_expanded())

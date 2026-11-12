@@ -100,7 +100,7 @@ class FileBrowser(Gtk.Box):
         paned.set_end_child(right)
         self.append(paned)
         keys = Gtk.ShortcutController()
-        keys.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("<Control>s"),
+        keys.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("<Primary>s"),
                                        action=Gtk.CallbackAction.new(lambda *_: (self._save(), True)[1])))
         self.add_controller(keys)
         self.selected = None

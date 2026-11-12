@@ -19,6 +19,8 @@ from .containers import ContainersPage  # noqa: E402
 from .db_page import DatabasesPage  # noqa: E402
 from .sharing_page import SharingPage  # noqa: E402
 from .send_page import SendPage  # noqa: E402
+from .backups_page import BackupsPage  # noqa: E402
+from .stacks_page import StacksPage  # noqa: E402
 from . import theme  # noqa: E402
 from .theme import apply_accessibility  # noqa: E402
 from .files import cleanup_helpers  # noqa: E402
@@ -27,10 +29,11 @@ from .logs import LogsPage  # noqa: E402
 from .pages import BuildHistoryPage, BuildsPage, DiskPage, ImagesPage, NetworksPage, ResourcesPage, VolumesPage  # noqa: E402
 from .settings_page import SettingsPage  # noqa: E402
 from .store import Store  # noqa: E402
-from .util import ensure_tooltips, APP_ID, VERSION, app_icon, themed, Settings, fmt_bytes, fmt_pct, icon_button, label, spawn  # noqa: E402
+from .util import ensure_tooltips, open_uri, APP_ID, VERSION, app_icon, themed, Settings, fmt_bytes, fmt_pct, icon_button, label, spawn  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-PAGES = [("containers", ContainersPage), ("images", ImagesPage), ("volumes", VolumesPage), ("networks", NetworksPage),
+PAGES = [("containers", ContainersPage), ("stacks", StacksPage), ("images", ImagesPage), ("volumes", VolumesPage), ("networks", NetworksPage),
+         ("backups", BackupsPage),
          ("databases", DatabasesPage), ("sharing", SharingPage), ("send", SendPage),
          ("logs", LogsPage), ("resources", ResourcesPage), ("disk", DiskPage),
          ("builds", BuildHistoryPage), ("cache", BuildsPage),
@@ -50,6 +53,8 @@ class Window(Adw.ApplicationWindow):
         w, h = settings["window"] or (1240, 800)
         super().__init__(application=app, title="Berth", default_width=w, default_height=h, icon_name=app_icon())
         self.settings = settings
+        from . import compose as _compose
+        _compose.SETTINGS = settings              # remembered stacks (Stacks page)
         self.store = Store(settings["engine"] or None)
         self.store.sampler.interval = float(settings["interval"] or 2)
         self.toasts = Adw.ToastOverlay()
@@ -81,6 +86,8 @@ class Window(Adw.ApplicationWindow):
         self.sidebar = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE)
         self.sidebar.add_css_class("navigation-sidebar")
         self.counts = {}
+        # Settings sits apart, pinned under the list: always visible, however many pages there are
+        self.sidebar_end = Gtk.ListBox(selection_mode=Gtk.SelectionMode.SINGLE, css_classes=["navigation-sidebar"])
         for key, cls in PAGES:
             row = Gtk.ListBoxRow()
             row.key = key
@@ -91,11 +98,27 @@ class Window(Adw.ApplicationWindow):
             box.append(cnt)
             self.counts[key] = cnt
             row.set_child(box)
-            self.sidebar.append(row)
+            (self.sidebar_end if key == "settings" else self.sidebar).append(row)
         self.sidebar.set_header_func(self._sidebar_header)
-        self.sidebar.connect("row-selected", lambda _l, r: r and self.go(r.key, from_sidebar=True))
+        self.sidebar.connect("row-selected", lambda _l, r: r and (self.sidebar_end.unselect_all(),
+                                                                  self.go(r.key, from_sidebar=True)))
+        self.sidebar_end.connect("row-selected", lambda _l, r: r and (self.sidebar.unselect_all(),
+                                                                      self.go(r.key, from_sidebar=True)))
         self.sidebar.set_vexpand(True)
-        side.set_content(Gtk.ScrolledWindow(child=self.sidebar, vexpand=True))
+        sbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        find = Gtk.Button(tooltip_text="Go to anything — a container, stack, image, page or task (Ctrl+K)",
+                          css_classes=["sidebar-find"], action_name="app.palette")
+        fb = Gtk.Box(spacing=8)
+        fb.append(Gtk.Image(icon_name="system-search-symbolic"))
+        fb.append(Gtk.Label(label="Search", xalign=0, hexpand=True))
+        fb.append(Gtk.Label(label="⌘K" if sys.platform == "darwin" else "Ctrl+K",
+                            css_classes=["caption", "dim-label", "kbd-hint"]))
+        find.set_child(fb)
+        sbox.append(find)
+        sbox.append(Gtk.ScrolledWindow(child=self.sidebar, vexpand=True, hscrollbar_policy=Gtk.PolicyType.NEVER))
+        sbox.append(Gtk.Separator(margin_start=18, margin_end=18))
+        sbox.append(self.sidebar_end)
+        side.set_content(sbox)
         self.engine_box = Gtk.Box(spacing=8, css_classes=["engine-card"])
         self.engine_dot = Gtk.Box(valign=Gtk.Align.CENTER, css_classes=["dot", "exited"])
         self.engine_lbl = label("Connecting…", css=["caption"])
@@ -128,6 +151,10 @@ class Window(Adw.ApplicationWindow):
         off.set_content(self.off_page)
         self.stack.add_named(off, "off")
         content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
+        self.update_banner = Adw.Banner(revealed=False, button_label="What's new")
+        self.update_banner.connect("button-clicked", lambda b: (open_uri(getattr(b, "url", "")),
+                                                                b.set_revealed(False)))
+        content.append(self.update_banner)
         content.append(self.stack)
         content.append(self._statusbar())
         split.set_content(Adw.NavigationPage(title="Berth", child=content))
@@ -138,6 +165,7 @@ class Window(Adw.ApplicationWindow):
         self.store.connect("volumes", lambda *_: self._counts())
         self.store.connect("stats", lambda *_: self._status_stats())
         self.store.connect("containers", lambda *_: self._tray_state())
+        self.store.connect("trouble", lambda _s, cid, title, body: self.notify(title, body, key=f"ctr-{cid[:12]}"))
         self.store.connect("engine", lambda *_: self._tray_state())
         self.connect("notify::is-active", lambda *_: self.update_saver())
         self.connect("notify::suspended", lambda *_: self.update_saver())
@@ -146,6 +174,15 @@ class Window(Adw.ApplicationWindow):
         self.connect("notify::visible-dialog", lambda w, _p: w.get_visible_dialog() and
                      GLib.timeout_add(250, lambda: ensure_tooltips(w.get_visible_dialog() or w)))
         GLib.timeout_add_seconds(30, self._sweep_links)
+        GLib.timeout_add_seconds(20, lambda: self._check_update() and False)
+        try:                                           # charts draw with cairo through PyGObject's bridge
+            gi.require_foreign("cairo")
+        except (ImportError, AttributeError):
+            GLib.timeout_add_seconds(4, lambda: self.toast(
+                "Charts can't draw: install python3-gi-cairo (Debian, Ubuntu), python3-cairo (Fedora, Arch) or "
+                "python3-gobject-cairo (openSUSE)") and False)
+        GLib.timeout_add_seconds(60, lambda: self._run_backups() and False)   # catch up shortly after start
+        GLib.timeout_add_seconds(600, self._run_backups)
         # Responsive layout: one size class at a time (sm … 3xl). Each class is a breakpoint whose "apply" tells every
         # page; pages pick their own column counts, and style.css scales spacing and type per class. The ranges are in
         # sp, so a larger text size behaves like a smaller screen (accessibility first).
@@ -184,10 +221,7 @@ class Window(Adw.ApplicationWindow):
 
     def _sidebar_header(self, row, before):
         title = GROUPS.get(row.key)
-        if row.key == "settings":
-            sep = Gtk.Separator(margin_top=8, margin_bottom=6, margin_start=8, margin_end=8)
-            row.set_header(sep)
-        elif title:
+        if title:
             row.set_header(label(title.upper(), css=["sidebar-heading"], margin_top=4 if before is None else 14,
                                  margin_bottom=2, margin_start=12))
         else:
@@ -324,9 +358,14 @@ class Window(Adw.ApplicationWindow):
 
     # ── navigation ──
     def select_row(self, key):
-        for i, (k, _c) in enumerate(PAGES):
-            if k == key:
-                self.sidebar.select_row(self.sidebar.get_row_at_index(i))
+        for lb in (self.sidebar, self.sidebar_end):
+            i = 0
+            while (r := lb.get_row_at_index(i)) is not None:
+                if r.key == key:
+                    lb.select_row(r)
+                    (self.sidebar_end if lb is self.sidebar else self.sidebar).unselect_all()
+                    return
+                i += 1
 
     def go(self, key, from_sidebar=False):
         if key not in self.pages:
@@ -348,6 +387,56 @@ class Window(Adw.ApplicationWindow):
 
     def toast(self, msg):
         self.toasts.add_toast(Adw.Toast(title=GLib.markup_escape_text(str(msg)), timeout=4))
+
+    def notify(self, title, body="", toast=False, key=None):
+        """A desktop notification (also when Berth is in the tray), plus a toast when the window is in front.
+        Off in Settings → Notifications: then only the toast."""
+        if toast or self.is_active():
+            self.toast(f"{title}: {body}" if body else title)
+        if not self.settings["notify"] or self.is_active():
+            return
+        try:
+            n = Gio.Notification.new(title)
+            if body:
+                n.set_body(body[:300])
+            n.set_default_action("app.show-window")
+            self.get_application().send_notification(key, n)
+        except Exception:                         # no notification service: the toast is enough
+            self.toast(f"{title}: {body}" if body else title)
+
+    def _check_update(self):
+        if not self.settings["update_check"] or os.environ.get("FLATPAK_ID") or os.environ.get("BERTH_NO_UPDATE_CHECK"):
+            return False
+        from . import update
+        from .util import bg
+
+        def done(r):
+            if r and r[0] != self.settings["update_skip"]:
+                self.update_banner.set_title(f"Berth {r[0]} is out — you have {VERSION}")
+                self.update_banner.url = r[1]
+                self.update_banner.set_revealed(True)
+        bg(update.check, done=done, error=lambda e: None)
+        return False
+
+    def _run_backups(self):
+        """Scheduled backups that are due (every 10 min, and once after start to catch up missed ones)."""
+        from . import backups
+        sch = self.settings["backups"] or []
+        if not (sch and self.store.up):
+            return True
+        state = backups.load_state()
+        if not any(backups.is_due(x, state) for x in sch):
+            return True
+        from .util import bg
+
+        def done(res):
+            for x, ok, msg in res:
+                if not ok:
+                    self.notify("Backup failed", f"{x['target']}: {msg[:200]}", key=f"backup-{x['id']}")
+            if "backups" in self.pages:
+                self.pages["backups"].refresh()
+        bg(backups.run_due, self.store.engine, sch, done=done, error=lambda e: None)
+        return True
 
     # ── resource saver: sample only while someone can see the numbers ──
     def update_saver(self):
@@ -423,7 +512,8 @@ class Window(Adw.ApplicationWindow):
 
 class App(Adw.Application):
     def __init__(self, shot=None, page=None):
-        flags = Gio.ApplicationFlags.NON_UNIQUE if shot else Gio.ApplicationFlags.DEFAULT_FLAGS
+        flags = (Gio.ApplicationFlags.NON_UNIQUE if shot or os.environ.get("BERTH_SELF_TEST")
+                 else Gio.ApplicationFlags.DEFAULT_FLAGS)
         super().__init__(application_id=APP_ID, flags=flags)
         self.settings = Settings()
         self.shot, self.start_page = shot, page
@@ -453,13 +543,17 @@ class App(Adw.Application):
         act("shortcuts", lambda *_: self._shortcuts())
         act("welcome", lambda *_: self._welcome())
         act("quit", lambda *_: self._really_quit() if self.win else self.quit())
+        act("show-window", lambda *_: self._show() if hasattr(self, "_show") else self.activate())
         act("search", lambda *_: self.win.focus_search())
+        act("palette", lambda *_: self.win and __import__("berth.palette", fromlist=["x"]).Palette(self.win)
+            .present(self.win))
         act("go", lambda _a, p: self.win.go(PAGES[p.get_int32()][0]), GLib.VariantType.new("i"))
-        self.set_accels_for_action("app.preferences", ["<Control>comma"])
-        self.set_accels_for_action("app.quit", ["<Control>q"])
-        self.set_accels_for_action("app.search", ["<Control>f"])
+        self.set_accels_for_action("app.preferences", ["<Primary>comma"])
+        self.set_accels_for_action("app.quit", ["<Primary>q"])
+        self.set_accels_for_action("app.search", ["<Primary>f"])
+        self.set_accels_for_action("app.palette", ["<Primary>k", "<Primary>p"])
         for i in range(min(9, len(PAGES))):
-            self.set_accels_for_action(f"app.go({i})", [f"<Control>{i + 1}"])
+            self.set_accels_for_action(f"app.go({i})", [f"<Primary>{i + 1}"])
 
     def set_tray(self, on):
         self.settings["tray"] = on
@@ -512,6 +606,8 @@ class App(Adw.Application):
                     self.win.show_container(c["Id"], os.environ.get("BERTH_TAB"))
                 return False
             GLib.timeout_add(2500, open_it)
+        if os.environ.get("BERTH_SELF_TEST"):
+            GLib.timeout_add_seconds(3, lambda: self._self_test() and False)
         if self.shot:
             tries = {"n": 0}
 
@@ -528,6 +624,73 @@ class App(Adw.Application):
                 return False
             GLib.timeout_add_seconds(int(os.environ.get("BERTH_SHOT_DELAY", "6")),
                                      lambda: GLib.timeout_add(50, take) and False)
+
+    def _self_test(self):
+        """`berth --self-test` (CI on Windows, macOS, Linux): open every page and the main dialogs, close them, and
+        quit with exit code 1 if anything raised. Works without a Docker engine."""
+        import sys as _sys
+        from . import util
+        errors = []
+        prev = _sys.excepthook
+
+        def hook(t, v, tb):
+            errors.append(f"{t.__name__}: {v}")
+            prev(t, v, tb)
+        _sys.excepthook = hook
+        real_log = util.log_error
+
+        def counting(where, e=None, tb=None):
+            text = f"{where}: {e or (tb or '').strip().splitlines()[-1:]}"
+            if "Docker Engine" not in text and "EngineError" not in text:     # no engine on a CI runner: expected
+                errors.append(text)
+            real_log(where, e, tb) if tb is None else real_log(where, e, tb=tb)
+        util.log_error = counting
+        w = self.win
+        dialogs = []
+
+        def make():
+            from .palette import Palette
+            from .pages import PullDialog, RunDialog, BuildDialog
+            from .compose import ComposeOpen
+            from .backups_page import ScheduleDialog
+            from .onboarding import Onboarding
+            return [lambda: Palette(w), lambda: PullDialog(w, w.store),
+                    lambda: RunDialog(w, w.store, {"ref": "busybox:latest", "repo": "busybox", "tag": "latest",
+                                                   "id": "sha256:0"}),
+                    lambda: BuildDialog(w, w.store), lambda: ComposeOpen(w, w.store),
+                    lambda: ScheduleDialog(w.pages["backups"]), lambda: Onboarding(w)]
+
+        def steps():
+            for key, _cls in PAGES:
+                w.go(key)
+                yield 400
+            try:
+                dialogs.extend(make())
+            except Exception as e:                  # an import that fails in a packaged build
+                errors.append(f"dialogs: {e}")
+            for mk in dialogs:
+                try:
+                    d = mk()
+                    d.present(w)
+                    yield 500
+                    d.force_close()
+                except Exception as e:
+                    errors.append(f"{mk}: {e}")
+                yield 150
+        it = steps()
+
+        def tick():
+            try:
+                GLib.timeout_add(next(it), tick)
+            except StopIteration:
+                print(f"self-test: {len(PAGES)} pages, {len(dialogs)} dialogs, {len(errors)} errors", flush=True)
+                for e in errors[:20]:
+                    print("  ", e, flush=True)
+                self.self_test_failed = bool(errors)
+                self.quit()
+            return False
+        tick()
+        return False
 
     def do_shutdown(self):
         """Public links stop with Berth unless the user chose to keep them (a share should never outlive the app
@@ -565,7 +728,8 @@ class App(Adw.Application):
     def _shortcuts(self):
         d = Adw.AlertDialog(heading="Keyboard shortcuts")
         d.set_body_use_markup(True)
-        d.set_body("<tt>Ctrl+F</tt>  Search the current page\n<tt>Ctrl+1…9</tt>  " + ", ".join(
+        d.set_body("<tt>Ctrl+K</tt>  Go to anything — a container, stack, image, page or task\n"
+                   "<tt>Ctrl+F</tt>  Search the current page\n<tt>Ctrl+1…9</tt>  " + ", ".join(
             cls.title for _k, cls in PAGES[:9]) + "\n<tt>Ctrl+Enter</tt>  Run the query (Databases)\n"
             "<tt>Ctrl+,</tt>  Settings\n<tt>Ctrl+Q</tt>  Quit")
         d.add_response("ok", "Close")
@@ -588,4 +752,10 @@ def main(argv=None):
         i = argv.index("--page")
         page = argv[i + 1]
         del argv[i:i + 2]
-    return App(shot, page).run(argv)
+    if "--self-test" in argv:
+        argv.remove("--self-test")
+        for k in ("BERTH_SELF_TEST", "BERTH_NO_WELCOME", "BERTH_NO_UPDATE_CHECK"):
+            os.environ[k] = "1"
+    app = App(shot, page)
+    rc = app.run(argv)
+    return 1 if getattr(app, "self_test_failed", False) else rc

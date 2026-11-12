@@ -57,6 +57,7 @@ class Editor:
     can_add = can_delete = True
     can_empty = can_drop = False
     document = False            # True: the panel edits one JSON document instead of separate fields
+    inline = False              # True: a grid cell is one stored value, so it can be edited in place
 
     def __init__(self, b):
         self.b = b
@@ -93,7 +94,7 @@ class Editor:
 
 # ── PostgreSQL ──────────────────────────────────────────────────────────────────────────────────────────────────
 class PgEdit(Editor):
-    can_empty = can_drop = True
+    can_empty = can_drop = inline = True
 
     def __init__(self, b):
         super().__init__(b)
@@ -239,7 +240,7 @@ MYSQL_BINARY = {"blob", "tinyblob", "mediumblob", "longblob", "binary", "varbina
 
 
 class MyEdit(Editor):
-    can_empty = can_drop = True
+    can_empty = can_drop = inline = True
 
     def __init__(self, b):
         super().__init__(b)

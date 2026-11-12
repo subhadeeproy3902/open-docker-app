@@ -210,6 +210,37 @@ def edit_sql(kind, b, node, view=None, nokey=None):
         check(f"edit {kind}: empty a table", b.query("select count(*) from loose").rows == [["0"]])
 
 
+def tools_roundtrip(kind, b, node, count_sql, mutate):
+    """Whole-table export (CSV + JSON) → import back; whole-database backup → change → restore."""
+    from berth import dbtools
+    tmp = tempfile.mkdtemp(prefix="berth-test-tools-")
+    try:
+        n0 = count_sql()
+        csvp, jsp = os.path.join(tmp, "t.csv"), os.path.join(tmp, "t.json")
+        n = dbtools.export_table(b, node, csvp, "csv")
+        check(f"tools {kind}: export a whole table to CSV", n == n0 and os.path.getsize(csvp) > 0, (n, n0))
+        n = dbtools.export_table(b, node, jsp, "json")
+        data = json.load(open(jsp))
+        check(f"tools {kind}: export to JSON", n == n0 and len(data) == n0, (n, len(data)))
+        if kind != "redis":
+            ok, msg = raises(dbtools.import_rows, b, node, jsp, True, False, contains="allow changes")
+            check(f"tools {kind}: import needs “Allow changes”", ok, msg)
+            dbtools.import_rows(b, node, jsp, replace=True, allow=True)
+            check(f"tools {kind}: import JSON back (replace) keeps every row", count_sql() == n0, count_sql())
+            dbtools.import_rows(b, node, csvp, replace=True, allow=True)
+            check(f"tools {kind}: import CSV back (replace)", count_sql() == n0, count_sql())
+        bk = os.path.join(tmp, "db." + dbtools.BACKUP_EXT[b.kind])
+        size = dbtools.backup(b, bk)
+        check(f"tools {kind}: back up the database", size > 0 and os.path.getsize(bk) == size, size)
+        mutate()
+        changed = count_sql()
+        dbtools.restore(b, bk, allow=True)
+        check(f"tools {kind}: restore brings the data back", count_sql() == n0 and changed != n0, (changed, count_sql()))
+    finally:
+        import shutil as _sh
+        _sh.rmtree(tmp, ignore_errors=True)
+
+
 def t_postgres():
     cid = run("pg", "postgres:16-alpine", {"POSTGRES_PASSWORD": "pw", "POSTGRES_USER": "app", "POSTGRES_DB": "shop"})
     b = backend(cid)
@@ -244,6 +275,16 @@ def t_postgres():
     ok, msg = raises(b.browse, flat["orders"], 0, 5, contains="one condition")
     check("postgres: a filter can't carry a second statement", ok, msg)
     b.sort, b.where = None, ""
+    b.query("create table types(id serial primary key, j jsonb, t text, n numeric, d timestamptz default now(), "
+            "a int[], bin bytea); insert into types(j, t, n, a, bin) values ('{\"k\": [1, 2]}', 'line\nbreak, \"q\"', "
+            "1.5, '{1,2}', '\\x00ff'), (null, '', null, null, null)", allow_write=True)
+    flat = {n.label: n for sch in b.tree() for n in b.children(sch)}
+    cnt = lambda: int(b.query("select count(*) from types").rows[0][0])
+    tools_roundtrip("postgres", b, flat["types"], cnt,
+                    lambda: b.query("delete from types", allow_write=True))
+    v = b.query("select j::text, t, a::text from types order by id").rows
+    check("tools postgres: values survive export → import → backup → restore", v[0] == ['{"k": [1, 2]}',
+          'line\nbreak, "q"', '{1,2}'] and v[1][1] in ("", None), v)
     b.query("create table files(id int primary key, data bytea); insert into files values (1, decode(repeat('00ff', 600000), "
             "'hex'))", allow_write=True)
     flat = {n.label: n for sch in b.tree() for n in b.children(sch)}
@@ -278,6 +319,9 @@ def t_mysql():
     ok, msg = raises(ed.save, flat["orders"], ed.ident(flat["orders"], r, 0), {"item": "y" * 120_000}, True,
                      contains="too long")
     check("edit mysql: a value too long for its column is refused, also through a file", ok, msg)
+    flat = {n.label: n for n in b.tree()}
+    cnt = lambda: int(b.query("select count(*) from orders").rows[0][0])
+    tools_roundtrip("mysql", b, flat["orders"], cnt, lambda: b.query("delete from orders", allow_write=True))
 
 
 def t_redis():
@@ -349,6 +393,15 @@ def t_redis():
     check("edit redis: new key", b._val("HGET", "fresh", "field") == "v1")
     ed.drop(db.Node("fresh", "key", "fresh"), True)
     check("edit redis: key deleted", int(b._val("EXISTS", "fresh")) == 0)
+    from berth import dbtools
+    tmp = tempfile.mkdtemp(prefix="berth-test-tools-")
+    keys0 = int(b._val("DBSIZE"))
+    bk = os.path.join(tmp, "r.rdb")
+    check("tools redis: back up (RDB)", dbtools.backup(b, bk) > 0)
+    b.query("FLUSHDB", allow_write=True)
+    dbtools.restore(b, bk, allow=True)
+    check("tools redis: restore (stop → put the RDB → start) brings the keys back", int(b._val("DBSIZE")) == keys0,
+          (keys0, b._val("DBSIZE")))
 
 
 def t_mongo():
@@ -393,6 +446,8 @@ def t_mongo():
     ed.delete(node, ident, True)
     ok, msg = raises(ed.delete, node, ident, True, contains="isn't there")
     check("edit mongo: delete, then a stale delete says it's gone", ok, msg)
+    cnt = lambda: len(b.browse(node, 0, 1000).rows)
+    tools_roundtrip("mongo", b, node, cnt, lambda: b.query("db.orders.deleteMany({})", allow_write=True))
 
 
 def http_seed(b, method, path, body=None):

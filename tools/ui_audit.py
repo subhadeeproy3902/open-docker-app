@@ -7,6 +7,7 @@ tree of each screen as JSON next to a PNG, so changes can be compared.
 Exit code 1 when something is missing."""
 import json
 import os
+os.environ.setdefault("BERTH_NO_UPDATE_CHECK", "1")       # tests never ask GitHub for releases
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -247,7 +248,12 @@ def scen():
                 ("dialog-onboarding", lambda: onboarding.Onboarding(w)),
                 ("dialog-daemon-json", lambda: settings_page.DaemonJsonDialog(w)),
                 ("dialog-compose-open", lambda: compose.ComposeOpen(w, w.store)),
-                ("dialog-sqlite", lambda: db_page.SqliteDialog(w.pages["databases"]))]
+                ("dialog-sqlite", lambda: db_page.SqliteDialog(w.pages["databases"])),
+                ("dialog-build", lambda: pages.BuildDialog(w, w.store)),
+                ("dialog-backup-schedule", lambda: __import__("berth.backups_page", fromlist=["x"]).ScheduleDialog(
+                    w.pages["backups"])),
+                ("dialog-compose-check", lambda: compose.ComposeOpen(w, w.store)),
+                ("dialog-palette", lambda: __import__("berth.palette", fromlist=["x"]).Palette(w))]
     for name, make in dialogs:
         try:
             d = make()

@@ -41,7 +41,10 @@ def socket_path():
 
 
 def _open(address, timeout=None):
-    """Connected socket to the engine: a unix socket path, unix://path, or tcp://host:port."""
+    """Connected socket to the engine: a unix socket path, unix://path, tcp://host:port or ssh://user@host."""
+    if address.startswith("ssh://"):
+        from .sshtunnel import ensure
+        address = ensure(address)                # a local port forwarded to the remote socket
     if address.startswith("tcp://"):
         hostport = address[6:].rstrip("/")
         host, _, port = hostport.rpartition(":")
@@ -106,7 +109,7 @@ def diagnose(address):
 
 
 def docker_host_env(address):
-    return address if address.startswith(("tcp://", "unix://")) else "unix://" + address
+    return address if address.startswith(("tcp://", "unix://", "ssh://")) else "unix://" + address
 
 
 class EngineError(Exception):
@@ -247,6 +250,12 @@ class Engine:
             raise EngineError("Docker Engine is not running", 0)
         except socket.gaierror as e:
             raise EngineError(f"Engine address: {e}", 0)
+        except ConnectionResetError as e:
+            if self.path.startswith("ssh://"):
+                raise EngineError("Signed in over SSH, but the remote Docker socket refused the connection. Is Docker "
+                                  "running there, may your user use it (the docker group), and does the SSH server "
+                                  "allow socket forwarding (AllowStreamLocalForwarding)?", 0)
+            raise EngineError(f"Docker Engine: {e}", 0)
         except (ConnectionRefusedError, socket.timeout, OSError) as e:
             raise EngineError(f"Docker Engine: {e}", 0)
         finally:
@@ -264,7 +273,7 @@ class Engine:
         return Stream(path + _q(query), method, body, self.path)
 
     def alive(self):
-        if not self.path.startswith("tcp://") and not os.path.exists(self.path.replace("unix://", "")):
+        if not self.path.startswith(("tcp://", "ssh://")) and not os.path.exists(self.path.replace("unix://", "")):
             return False
         try:
             return self.req("GET", "/_ping", timeout=2) == "OK"
@@ -341,6 +350,42 @@ class Engine:
         code = (self.req("GET", f"/exec/{ex['Id']}/json") or {}).get("ExitCode")
         return code, out.decode(errors="replace"), err.decode(errors="replace")
 
+    def exec_to_file(self, cid, cmd, dest, env=None, timeout=3600, progress=None):
+        """Run a command in a container and write its stdout, byte for byte, to `dest` (dumps, exports: no size
+        limit, nothing held in memory). Returns (exit_code, stderr text, bytes written). progress(n) is called
+        as data arrives."""
+        body = {"AttachStdout": True, "AttachStderr": True, "Tty": False, "Cmd": cmd}
+        if env:
+            body["Env"] = [f"{k}={v}" for k, v in env.items()]
+        ex = self.req("POST", f"/containers/{cid}/exec", body=body)
+        st = self.stream(f"/exec/{ex['Id']}/start", method="POST", body={"Detach": False, "Tty": False})
+        buf, err, n, idle = b"", b"", 0, 0.0
+        try:
+            with open(dest, "wb") as f:
+                while True:
+                    c = st.read(1.0)
+                    if c is None:
+                        idle += 1.0
+                        if idle > timeout:
+                            break
+                        continue
+                    if not c:
+                        break
+                    idle = 0.0
+                    frames, buf = demux(buf + c)
+                    for s_, data in frames:
+                        if s_ == 2:
+                            err = (err + data)[-65536:]
+                        else:
+                            f.write(data)
+                            n += len(data)
+                    if progress:
+                        progress(n)
+        finally:
+            st.close()
+        code = (self.req("GET", f"/exec/{ex['Id']}/json") or {}).get("ExitCode")
+        return code, err.decode(errors="replace"), n
+
     # ── images ──
     def images(self):
         return self.req("GET", "/images/json", timeout=60)
@@ -365,6 +410,28 @@ class Engine:
         elif ":" in last:
             name, tag = ref.rsplit(":", 1)
         return self.stream("/images/create", {"fromImage": name, "tag": tag}, method="POST")
+
+    def build(self, tar_path, query):
+        """Start a build from a context tar (the classic builder over the API — used when there's no docker CLI).
+        Returns (response, connection); read JSON lines from the response, then close the connection."""
+        size = os.path.getsize(tar_path)
+        c = _Conn(self.path, 3600)
+        f = open(tar_path, "rb")
+        try:
+            c.request("POST", "/build" + _q(query), body=f,
+                      headers={"Content-Type": "application/x-tar", "Content-Length": str(size)})
+            r = c.getresponse()
+        finally:
+            f.close()
+        if r.status >= 400:
+            raw = r.read()
+            c.close()
+            raise EngineError(_message(raw) or f"HTTP {r.status}", r.status)
+        return r, c
+
+    def distribution(self, ref):
+        """What the registry has for this tag right now (asks through the engine, with its credentials)."""
+        return self.req("GET", f"/distribution/{urllib.parse.quote(ref, safe='/:@')}/json", timeout=30)
 
     # ── volumes / networks / prune ──
     def volumes(self):

@@ -1,10 +1,11 @@
 """Databases: find the database containers and explore them (tables / keys / collections / indices, data,
 structure, a query console). All engine work goes through berth.db in the background; this file is only the UI."""
 import json
+import os
 import re
 from gi.repository import Adw, Gdk, Gio, GLib, GObject, Gtk, Pango
 
-from . import db, db_edit
+from . import db, db_edit, dbtools
 from .pages import TablePage, save_dialog
 from .util import (Row, PageHeader, bg, cname, confirm, detail_tag, esc, flat_page, icon_button, label, push_detail,
                    state_of, table_card)
@@ -55,13 +56,16 @@ class ResultGrid(Gtk.Box):
 
         self.stack = Gtk.Stack(vexpand=True)
         self.model = Gio.ListStore(item_type=_Obj)
-        self.sel = Gtk.SingleSelection(model=self.model, autoselect=False, can_unselect=True)
+        # several rows can be selected (Ctrl / Shift + click) for bulk delete; one selected row opens in the panel
+        self.sel = Gtk.MultiSelection(model=self.model)
         self.sel.connect("selection-changed", self._selected)
         self.view = Gtk.ColumnView(model=self.sel, show_row_separators=True, show_column_separators=True,
                                    reorderable=False, hexpand=True)
         for c in ("data-table", "berth-table", "db-grid"):
             self.view.add_css_class(c)
-        self.view.connect("activate", lambda _v, pos: self.open(pos))
+        keys = Gtk.EventControllerKey()
+        keys.connect("key-pressed", self._grid_key)
+        self.view.add_controller(keys)
         self.view.get_sorter().connect("changed", self._sort_changed)
         sw = Gtk.ScrolledWindow(child=self.view, propagate_natural_height=True,
                                 hscrollbar_policy=Gtk.PolicyType.AUTOMATIC)
@@ -155,8 +159,9 @@ class ResultGrid(Gtk.Box):
         self._quiet = False
         self._quiet = True
         self.model.splice(0, self.model.get_n_items(), [_Obj(row) for row in r.rows])
-        self.sel.set_selected(Gtk.INVALID_LIST_POSITION)
+        self.sel.unselect_all()
         self._quiet = False
+        self._bulk_changed()
         if not r.rows:
             self.message("No rows", "The table is empty." + (" Add one with “Add row”." if self.ex and
                                                              self.ex.can_edit() else ""), "view-grid-symbolic")
@@ -197,11 +202,17 @@ class ResultGrid(Gtk.Box):
 
     def _column(self, name, i):
         def setup(_f, li):
-            li.set_child(Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, single_line_mode=True))
+            lb = Gtk.Label(xalign=0, ellipsize=Pango.EllipsizeMode.END, single_line_mode=True)
+            lb.li = li
+            dbl = Gtk.GestureClick(button=1)              # double-click a cell: edit it right there
+            dbl.connect("pressed", lambda g, n, _x, _y: n == 2 and self.edit_cell(lb.li.get_position(), i, lb))
+            lb.add_controller(dbl)
+            li.set_child(lb)
 
         def bind(_f, li):
             v = li.get_item().v[i] if i < len(li.get_item().v) else None
             lb = li.get_child()
+            lb.li = li
             if v is None:
                 lb.set_text(self.null_text)
                 lb.add_css_class("db-null")
@@ -222,33 +233,121 @@ class ResultGrid(Gtk.Box):
         else:
             self.ex.sort_by(col.get_title(), sorter.get_primary_sort_order() == Gtk.SortType.DESCENDING)
 
-    # ── the row panel ──
+    # ── selection ──
+    def positions(self):
+        """The selected rows, in order."""
+        return [i for i in range(self.model.get_n_items()) if self.sel.is_selected(i)]
+
+    def _set_sel(self, pos):
+        self._quiet = True
+        if pos is None or pos == Gtk.INVALID_LIST_POSITION:
+            self.sel.unselect_all()
+        else:
+            self.sel.select_item(pos, True)
+        self._quiet = False
+        self._bulk_changed()
+
+    def _bulk_changed(self):
+        if self.ex:
+            self.ex.sync_bulk(len(self.positions()))
+
     def _selected(self, *_):
         if self._quiet:
             return
-        pos = self.sel.get_selected()
-        if pos != Gtk.INVALID_LIST_POSITION:
-            self.open(pos)
+        sel = self.positions()
+        self._bulk_changed()
+        if len(sel) == 1 and (sel[0] != self.panel.pos or not self.split.get_show_sidebar()):
+            self.open(sel[0])
+        elif len(sel) > 1 and self.split.get_show_sidebar() and not self.panel.dirty():
+            self.split.set_show_sidebar(False)        # several rows: the bulk bar, not one row's panel
 
     def _unselect(self):
+        self._set_sel(None)
+
+    def _grid_key(self, _c, kv, _code, state):
+        if kv == Gdk.KEY_Delete and self.ex and self.positions():
+            self.ex.delete_selected()
+            return True
+        if kv in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and len(self.positions()) == 1:
+            self.open(self.positions()[0])
+            return True
+        return False
+
+    # ── editing one cell in place ──
+    def edit_cell(self, pos, i, anchor):
+        r, ex = self.result, self.ex
+        if r is None or not (0 <= pos < len(r.rows)) or not ex:
+            return
+        name = r.columns[i]
+        v = r.rows[pos][i]
+        if not (ex.can_edit() and getattr(r, "edit_why", "x") is None and ex.ed.inline):
+            self.open(pos)                                     # documents, keys: the panel edits them
+            return
+        if not ex.allow:
+            self.win.toast("Switch on “Allow changes” at the top to edit")
+            return
+        if isinstance(v, str) and (v.startswith("‹binary") or re.search(r"… \[[\d,]+ characters\]$", v)):
+            self.open(pos)
+            self.win.toast("A long value: edit it in full in the panel")
+            return
+        pop = Gtk.Popover(autohide=True)
+        pop.set_parent(anchor)
+        box = Gtk.Box(spacing=6, margin_start=6, margin_end=6, margin_top=6, margin_bottom=6)
+        entry = Gtk.Entry(text="" if v is None else v, width_chars=34, placeholder_text="NULL" if v is None else "")
+        box.append(entry)
+        nb = Gtk.Button(label="NULL", tooltip_text="Store no value (NULL)")
+        box.append(nb)
+        ok = Gtk.Button(label="Save", tooltip_text="Save this value (Enter)")
+        ok.add_css_class("suggested-action")
+        box.append(ok)
+        pop.set_child(box)
+        pop.connect("closed", lambda p: GLib.idle_add(lambda: p.unparent() or False))
+        ident = ex.ed.ident(ex.node, r, pos)
+        node = ex.node
+
+        def go(val):
+            pop.popdown()
+            if val == v:
+                return
+
+            def done(_m):
+                self.update_row(pos, {name: val})
+                self.win.toast(f"Saved {name}")
+            bg(ex.ed.save, node, ident, {name: val}, ex.allow, done=done,
+               error=lambda e: show_error(self.win, "Not saved", str(e)))
+        entry.connect("activate", lambda e: go(e.get_text()))
+        ok.connect("clicked", lambda *_: go(entry.get_text()))
+        nb.connect("clicked", lambda *_: go(None))
+        pop.popup()
+        entry.grab_focus()
+
+    def update_row(self, pos, changes):
+        """Show saved values in place (no reload: the list keeps its scroll position)."""
+        r = self.result
+        if r is None or not (0 <= pos < len(r.rows)):
+            return
+        row = list(r.rows[pos])
+        for col, val in changes.items():
+            if col in r.columns:
+                row[r.columns.index(col)] = None if val is None else db.cap(val)
+        r.rows[pos] = row
+        keep = self.positions()
         self._quiet = True
-        self.sel.set_selected(Gtk.INVALID_LIST_POSITION)
+        self.model.splice(pos, 1, [_Obj(row)])
+        for p in keep:
+            self.sel.select_item(p, False)
         self._quiet = False
 
     def open(self, pos):
         if not self.result or not (0 <= pos < len(self.result.rows)):
             return
         if self.panel.dirty() and pos != self.panel.pos:
-            back = self.panel.pos
-            self._quiet = True
-            self.sel.set_selected(back if back is not None else Gtk.INVALID_LIST_POSITION)
-            self._quiet = False
+            self._set_sel(self.panel.pos)
             confirm(self.win, "Discard your changes?", "The row you were editing has changes that aren't saved.",
                     "Discard", lambda: (self.panel.reset(), self.open(pos)))
             return
-        self._quiet = True
-        self.sel.set_selected(pos)
-        self._quiet = False
+        if pos not in self.positions() or len(self.positions()) != 1:
+            self._set_sel(pos)
         self.split.set_show_sidebar(True)
         self.panel.show_row(pos)
 
@@ -268,8 +367,8 @@ class ResultGrid(Gtk.Box):
                 self.open(p)
 
     def selected(self):
-        p = self.sel.get_selected()
-        return None if p == Gtk.INVALID_LIST_POSITION else p
+        sel = self.positions()
+        return sel[0] if len(sel) == 1 else None
 
     # ── an editable text document (Redis JSON) ──
     def sync_text_edit(self):
@@ -380,7 +479,7 @@ class RecordPanel(Gtk.Box):
         return self.grid.ex
 
     def _key(self, _c, kv, _code, state):
-        ctrl, alt = state & Gdk.ModifierType.CONTROL_MASK, state & Gdk.ModifierType.ALT_MASK
+        ctrl, alt = state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.META_MASK), state & Gdk.ModifierType.ALT_MASK
         if kv == Gdk.KEY_Escape:
             self.close()
             return True
@@ -647,10 +746,16 @@ class RecordPanel(Gtk.Box):
             self.win.toast(msg)
             for w in self.widgets:
                 w["touched"] = False
-            self.fields = [] if new else self.fields
-            ex.reload_data(keep=None if new else pos)
+            r = self.grid.result
             if new:
+                self.fields = []
                 self.grid.split.set_show_sidebar(False)
+                ex.reload_data()
+            elif r is not None and all(k in r.columns for k in values):
+                self.grid.update_row(pos, values)      # in place: the list keeps its scroll position
+                self.show_row(pos)
+            else:
+                ex.reload_data(keep=pos)
 
         def fail(e):
             self.sync()
@@ -720,6 +825,12 @@ class Explorer(Gtk.Box):
         self.header.add(icon_button("view-refresh-symbolic", "Reload", lambda *_: self.reload()))
         if backend.kind != "sqlite":
             menu = Gio.Menu()
+            if backend.kind in dbtools.BACKUP_EXT:
+                bkm = Gio.Menu()
+                bkm.append("Back up this database now…", "dbx.backup")
+                bkm.append("Schedule backups…", "dbx.schedule")
+                bkm.append("Restore a backup…", "dbx.restore")
+                menu.append_section(None, bkm)
             if backend.kind == "postgres":
                 menu.append("Rename this database…", "dbx.renamedb")
             sec = Gio.Menu()
@@ -732,7 +843,8 @@ class Explorer(Gtk.Box):
             self.header.add(mb)
             from . import quick
             ag = Gio.SimpleActionGroup()
-            for n, fn in (("renamedb", self._rename_db),
+            for n, fn in (("renamedb", self._rename_db), ("backup", self._backup_now), ("schedule", self._schedule),
+                          ("restore", self._restore),
                           ("renamectr", lambda: quick.rename_container(self.win, page.store, backend.cid)),
                           ("ports", lambda: quick.PortsDialog(self.win, page.store, backend.cid).present(self.win))):
                 a = Gio.SimpleAction.new(n, None)
@@ -811,6 +923,14 @@ class Explorer(Gtk.Box):
         self.add_btn.set_child(Adw.ButtonContent(icon_name="list-add-symbolic", label="Add row"))
         self.add_btn.connect("clicked", lambda *_: self.data.open_new())
         top.append(self.add_btn)
+        self.bulk_copy = Gtk.Button(visible=False, valign=Gtk.Align.CENTER, tooltip_text="Copy the selected rows as JSON")
+        self.bulk_copy.set_child(Adw.ButtonContent(icon_name="edit-copy-symbolic", label="Copy"))
+        self.bulk_copy.connect("clicked", lambda *_: self._copy_selected())
+        top.append(self.bulk_copy)
+        self.bulk_del = Gtk.Button(visible=False, valign=Gtk.Align.CENTER)
+        self.bulk_del.add_css_class("destructive-action")
+        self.bulk_del.connect("clicked", lambda *_: self.delete_selected())
+        top.append(self.bulk_del)
         self.node_menu = Gio.Menu()
         self.node_mb = Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=self.node_menu, visible=False,
                                       tooltip_text="More for this table", valign=Gtk.Align.CENTER)
@@ -819,7 +939,9 @@ class Explorer(Gtk.Box):
         nag = Gio.SimpleActionGroup()
         for n, fn in (("copyname", lambda: (self.get_clipboard().set(self.node.label), self.win.toast("Copied"))),
                       ("empty", lambda: self._node_act("empty")), ("drop", lambda: self._node_act("drop")),
-                      ("expire", self._expire), ("structure", lambda: self.views.set_visible_child_name("structure"))):
+                      ("expire", self._expire), ("structure", lambda: self.views.set_visible_child_name("structure")),
+                      ("csv", lambda: self._export("csv")), ("json", lambda: self._export("json")),
+                      ("import", self._import)):
             a = Gio.SimpleAction.new(n, None)
             a.connect("activate", lambda *_a, f=fn: f())
             nag.add_action(a)
@@ -1145,7 +1267,8 @@ class Explorer(Gtk.Box):
         r = self.data.result
         ok = self.can_edit() and r is not None and getattr(r, "edit_why", "x") is None
         unit = self.ed.unit
-        self.add_btn.set_visible(ok and self.ed.can_add)
+        self._add_ok = ok and self.ed.can_add
+        self.add_btn.set_visible(self._add_ok)
         self.add_btn.get_child().set_label(f"Add {unit}")
         self.add_btn.set_sensitive(self.allow)
         self.add_btn.set_tooltip_text(f"Add a {unit}" if self.allow else
@@ -1156,6 +1279,13 @@ class Explorer(Gtk.Box):
             m.append("Copy the name", "node.copyname")
             if self.b.kind != "redis":
                 m.append("Show its structure", "node.structure")
+            if self.b.kind in ("postgres", "mysql", "mongo", "sqlite"):
+                ex = Gio.Menu()
+                ex.append("Export all rows as CSV…", "node.csv")
+                ex.append("Export all rows as JSON…", "node.json")
+                if self.can_edit() and self.b.kind != "sqlite":
+                    ex.append("Import rows from a file…", "node.import")
+                m.append_section(None, ex)
             sec = Gio.Menu()
             if self.can_edit() and self.b.kind == "redis":
                 sec.append("Set expiry…", "node.expire")
@@ -1166,12 +1296,64 @@ class Explorer(Gtk.Box):
             if sec.get_n_items():
                 m.append_section(None, sec)
         self.node_mb.set_visible(bool(self.node))
-        for n in ("empty", "drop", "expire"):
+        for n in ("empty", "drop", "expire", "import"):
             self.node_ag.lookup_action(n).set_enabled(self.allow)
         if hasattr(self, "newkey"):
             self.newkey.set_sensitive(self.allow)
         self.data.panel.sync()
         self.data.sync_text_edit()
+        self.sync_bulk(len(self.data.positions()))
+
+    def sync_bulk(self, n):
+        """Ctrl / Shift + click selected several rows: offer to copy or delete them together."""
+        r = self.data.result
+        ok = self.can_edit() and r is not None and getattr(r, "edit_why", "x") is None and self.ed.can_delete
+        unit = self.ed.unit
+        self.bulk_copy.set_visible(n > 1)
+        self.bulk_del.set_visible(n > 1 and ok)
+        self.bulk_del.set_label(f"Delete {n:,} {unit}s")
+        self.bulk_del.set_sensitive(self.allow)
+        self.bulk_del.set_tooltip_text("Delete the selected rows (Delete key)" if self.allow else
+                                       "Switch on “Allow changes” at the top to delete")
+        self.add_btn.set_visible(getattr(self, "_add_ok", False) and n <= 1)
+
+    def _copy_selected(self):
+        r = self.data.result
+        rows = [dict(zip(r.columns, r.rows[p])) for p in self.data.positions()]
+        self.get_clipboard().set(json.dumps(rows, indent=2, ensure_ascii=False))
+        self.win.toast(f"Copied {len(rows):,} rows as JSON")
+
+    def delete_selected(self):
+        r, node = self.data.result, self.node
+        pos = self.data.positions()
+        if not pos or r is None or getattr(r, "edit_why", "x") is not None or not self.can_edit():
+            return
+        if not self.allow:
+            self.win.toast("Switch on “Allow changes” at the top to delete")
+            return
+        idents = [self.ed.ident(node, r, p) for p in pos]
+        unit = self.ed.unit + ("s" if len(idents) > 1 else "")
+
+        def work():
+            done_n, errors = 0, []
+            for ident in idents:
+                try:
+                    self.ed.delete(node, ident, True)
+                    done_n += 1
+                except db.DbError as e:
+                    errors.append(str(e))
+            return done_n, errors
+
+        def done(res):
+            n, errors = res
+            self.data.split.set_show_sidebar(False)
+            self.reload_data()
+            if errors:
+                show_error(self.win, f"Deleted {n:,} of {len(idents):,}", "\n".join(sorted(set(errors)))[:1200])
+            else:
+                self.win.toast(f"Deleted {n:,} {unit}")
+        confirm(self.win, f"Delete {len(idents):,} {unit}?", f"From <b>{esc(node.label)}</b>. This can't be undone.",
+                "Delete", lambda: bg(work, done=done, error=lambda e: show_error(self.win, "Not deleted", str(e))))
 
     def _node_act(self, what):
         node = self.node
@@ -1242,6 +1424,97 @@ class Explorer(Gtk.Box):
         d.connect("response", resp)
         d.present(self.win)
 
+    # ── whole table / whole database ──
+    def _export(self, fmt):
+        node = self.node
+        if not node:
+            return
+
+        def write(path):
+            self.win.toast(f"Exporting {node.label}…")
+            bg(dbtools.export_table, self.b, node, path, fmt,
+               done=lambda n: self.win.toast(f"Exported {n:,} rows to {os.path.basename(path)}"),
+               error=lambda e: show_error(self.win, "Not exported", str(e)))
+        save_dialog(self.win, f"Export {node.label}", f"{dbtools.safe(node.label)}.{fmt}", write)
+
+    def _import(self):
+        node = self.node
+        if not (node and self.allow):
+            self.win.toast("Switch on “Allow changes” at the top to import")
+            return
+        d = Gtk.FileDialog(title=f"Import rows into {node.label}", accept_label="Choose")
+        filt = Gtk.FileFilter(name="CSV or JSON")
+        for pat in ("*.csv", "*.json", "*.ndjson", "*.jsonl", "*.tsv"):
+            filt.add_pattern(pat)
+        fl = Gio.ListStore.new(Gtk.FileFilter)
+        fl.append(filt)
+        d.set_filters(fl)
+
+        def picked(dlg, res):
+            try:
+                f = dlg.open_finish(res)
+            except GLib.Error:
+                return
+            path = f.get_path() if f else None
+            if not path:
+                return
+            a = Adw.AlertDialog(heading=f"Import into {node.label}",
+                                body=f"Rows from {os.path.basename(path)} are matched to the table's columns by "
+                                     "name (other columns are skipped). All or nothing: if one row fails, none "
+                                     "are added.")
+            a.add_response("cancel", "Cancel")
+            a.add_response("replace", "Replace all rows")
+            a.add_response("add", "Add the rows")
+            a.set_response_appearance("replace", Adw.ResponseAppearance.DESTRUCTIVE)
+            a.set_response_appearance("add", Adw.ResponseAppearance.SUGGESTED)
+            a.set_default_response("add")
+
+            def resp(_a, r):
+                if r not in ("add", "replace"):
+                    return
+
+                def done(res_):
+                    n, ignored = res_
+                    self.win.toast(f"Imported {n:,} rows" + (f" (skipped columns: {', '.join(ignored[:5])})"
+                                                             if ignored else ""))
+                    self.reload_data()
+                bg(dbtools.import_rows, self.b, node, path, r == "replace", self.allow, done=done,
+                   error=lambda e: show_error(self.win, "Not imported", str(e)))
+            a.connect("response", resp)
+            a.present(self.win)
+        d.open(self.win, None, picked)
+
+    def _backup_now(self):
+        def write(path):
+            self.win.toast("Backing up…")
+            bg(dbtools.backup, self.b, path,
+               done=lambda n: self.win.toast(f"Backup saved: {os.path.basename(path)} · {db._size(n)}"),
+               error=lambda e: show_error(self.win, "Backup failed", str(e)))
+        save_dialog(self.win, "Back up this database", dbtools.backup_name(self.b), write)
+
+    def _schedule(self):
+        from .backups_page import ScheduleDialog
+        bp = self.win.pages.get("backups")
+        if bp:
+            ScheduleDialog(bp, preset=("db", self.b.name, "" if self.b.kind == "redis" else str(self.b.db or ""))
+                           ).present(self.win)
+
+    def _restore(self):
+        bp = self.win.pages.get("backups")
+        if not bp:
+            return
+        d = Gtk.FileDialog(title="Choose a backup to restore", accept_label="Choose")
+
+        def picked(dlg, res):
+            try:
+                f = dlg.open_finish(res)
+            except GLib.Error:
+                return
+            if f and f.get_path():
+                bp.restore(f.get_path(), {"target": self.b.name, "db": "" if self.b.kind == "redis"
+                                          else str(self.b.db or "")})
+        d.open(self.win, None, picked)
+
     def save_text(self, text):
         node = self.node
         bg(self.ed.save_text, node, text, self.allow, done=lambda m: (self.win.toast(m), self.reload_data()),
@@ -1296,7 +1569,7 @@ class Explorer(Gtk.Box):
 
     # ── query ──
     def _editor_key(self, _c, keyval, _code, state):
-        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and state & Gdk.ModifierType.CONTROL_MASK:
+        if keyval in (Gdk.KEY_Return, Gdk.KEY_KP_Enter) and state & (Gdk.ModifierType.CONTROL_MASK | Gdk.ModifierType.META_MASK):
             self._run()
             return True
         return False

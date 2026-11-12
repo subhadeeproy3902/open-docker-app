@@ -4,6 +4,7 @@ Off-screen:  gtk4-broadwayd :9 &  then
   GDK_BACKEND=broadway BROADWAY_DISPLAY=:9 XDG_CONFIG_HOME=/tmp/x dbus-run-session -- python3 tests/clickall.py
 Dialogs it opens are closed without confirming; only its own throwaway container `berth-clicktest` is acted on."""
 import os
+os.environ.setdefault("BERTH_NO_UPDATE_CHECK", "1")       # tests never ask GitHub for releases
 os.environ.setdefault("BERTH_NO_WELCOME", "1")      # the first-run welcome would cover the window
 import sys
 import time
@@ -174,12 +175,21 @@ def scenario(app):
     yield from audit(win, "sidebar", win.get_content().get_child().get_sidebar().get_child())
     win.apply_theme("system")
     # every page: header + body (row cells of real containers are skipped by INTERNAL=ColumnView)
-    for key in ("containers", "images", "volumes", "networks", "logs", "builds", "cache", "resources", "disk", "kubernetes", "settings"):
+    # deny: buttons that change the demo stacks or open a file chooser (no portal off-screen)
+    deny_extra = {"stacks": ("Compose down", "Restart every service", "Pull newer images", "Compose up"),
+                  "backups": ("Restore", "Remove this schedule", "Delete this backup", "Open the folder", "Show in its"),
+                  "send": ("Share files", "Share a folder", "Receive from phone"),
+                  "sharing": ("Stop", "Remove", "Open in browser", "Save HTTPS"),
+                  "databases": ("Start", "Open SQLite")}
+    for key in ("containers", "stacks", "images", "volumes", "networks", "backups", "databases", "sharing", "send",
+                "logs", "builds", "cache", "resources", "disk", "kubernetes", "settings"):
         win.go(key)
         yield 3
         page = win.pages[key]
-        yield from audit(win, f"page:{key}", page, deny=("Stop engine",))
+        yield from audit(win, f"page:{key}", page, deny=("Stop engine",) + deny_extra.get(key, ()))
         close_popups(win)
+        if key == "databases":
+            page.nav.pop_to_tag("list")
 
     # container detail: all header buttons + every tab's own controls (acts only on berth-clicktest)
     cp = win.pages["containers"]

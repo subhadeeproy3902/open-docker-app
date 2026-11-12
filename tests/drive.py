@@ -5,8 +5,10 @@ Run off-screen:  gtk4-broadwayd :9 &  then
 It creates its own throwaway container `berth-selftest` and volume `berth-selftest-vol` and removes them.
 """
 import os
+os.environ.setdefault("BERTH_NO_UPDATE_CHECK", "1")       # tests never ask GitHub for releases
 os.environ.setdefault("BERTH_NO_WELCOME", "1")      # the first-run welcome would cover the window
 import sys
+import tempfile
 import time
 import traceback
 
@@ -573,6 +575,124 @@ def scenario(app):
                 x[ex.data.result.columns.index("country")] == "DE" for x in ex.data.result.rows), 20)
             check("The row filter searches the table", ok)
         dp.nav.pop_to_tag("list")
+
+    # 11c. the P1 round: bulk select, stacks + compose check, backups, Ctrl+K, full Run dialog, build, image updates
+    cp = win.pages["containers"]
+    win.go("containers")
+    yield 1
+    cp.sel_btn.set_active(True)
+    cp._pick_all(True)
+    check("Containers: selection mode ticks every container", len(cp.picked) == len(st.containers) and
+          cp.sel_bar.get_reveal_child(), len(cp.picked))
+    site = next((c for c in st.containers if c["Names"][0] == "/blog-site-1"), None)
+    cp._pick_all(False)
+    if site:
+        cp.picked = {site["Id"]}
+        cp._bulk("restart")
+        ok = yield from wait_for(lambda: any(c["Id"] == site["Id"] and c.get("State") == "running"
+                                             and "second" in c.get("Status", "") for c in st.containers), 40)
+        check("Containers: bulk restart", ok)
+    cp.sel_btn.set_active(False)
+    check("Containers: leaving selection mode clears it", not cp.picked and not cp.col_pick.get_visible())
+
+    sp_ = win.pages["stacks"]
+    win.go("stacks")
+    yield 1
+    from berth.stacks_page import stacks as _stacks
+    names = [x["project"] for x in _stacks(st.containers, [])]
+    check("Stacks page lists the demo stacks", {"shop", "blog"} <= set(names) and len(sp_.groups) >= 2, names)
+    from berth import compose_check
+    demo_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "tools", "demo")
+    res = yield from _in_thread(lambda: compose_check.check([os.path.join(demo_dir, "shop.compose.yaml")],
+                                                             st.containers, st.volumes, st.networks, st.images,
+                                                             "shop"), 90)
+    check("Compose check: a running stack's own ports are not a clash", not [m for lv, m in res if lv == "error"], res)
+    tmpd = tempfile.mkdtemp(prefix="berth-test-")
+    bad = os.path.join(tmpd, "compose.yaml")
+    with open(bad, "w") as f:
+        f.write("services:\n  a:\n    image: nginx:alpine\n    ports: ['8080:80']\n"
+                "    environment:\n      - X=${NOT_SET_ANYWHERE}\n  b:\n    build: ./nope\n")
+    res = yield from _in_thread(lambda: compose_check.check([bad], st.containers, st.volumes, st.networks,
+                                                             st.images, "other"), 90)
+    msgs = " | ".join(m for _lv, m in res)
+    check("Compose check finds a port clash, a missing build folder and an unset variable",
+          "8080" in msgs and "./nope" in msgs and "NOT_SET_ANYWHERE" in msgs, msgs[:300])
+    with open(bad, "w") as f:
+        f.write("services:\n  a:\n    image: nginx:alpine\n    env_file: missing.env\n")
+    res = yield from _in_thread(lambda: compose_check.check([bad], [], [], [], [], "other"), 90)
+    check("Compose check: a missing env file, in plain words", res and res[0][0] == "error" and
+          "missing.env doesn't exist" in res[0][1], res)
+
+    from berth import backups as bk
+    folder = tempfile.mkdtemp(prefix="berth-test-backups-")
+    pgc = next((c for c in st.containers if c["Names"][0] == "/shop-db-1"), None)
+    if pgc:
+        s1 = bk.new_schedule("db", "shop-db-1", "shop", 24, 1, folder)
+        s2 = bk.new_schedule("volume", "shop_redisdata", "", 24, 2, folder)
+        for _ in range(2):
+            r = yield from _in_thread(lambda: bk.run_due(st.engine, [s1, s2], force=True), 120)
+            yield 1.2
+        files = sorted(os.listdir(folder))
+        check("Backups: database and volume backed up, old ones pruned to “keep”",
+              len([f for f in files if f.endswith(".dump")]) == 1 and
+              len([f for f in files if f.endswith(".tar.gz")]) == 2 and all(ok for _s, ok, _m in r), files)
+        win.go("backups")
+        yield 1
+
+    from berth.palette import Palette, score
+    pal = Palette(win)
+    yield from wait_for(lambda: any(":" in t for t, *_x in pal.items), 20)
+    titles = [t for t, *_x in pal.items]
+    check("Ctrl+K knows pages, tasks, containers, stacks and images",
+          "Backups" in titles and "shop-db-1" in titles and "shop" in titles and any(":" in t for t in titles),
+          [t for t in titles if t in ("Backups", "shop-db-1", "shop")] + [t for t in titles if ":" in t][:2])
+    check("Ctrl+K matching: prefix beats letters-in-order", score("shop", "shop-db-1") > score("shdb", "shop-db-1") > 0)
+    pal.force_close()
+
+    from berth.pages import RunDialog, BuildDialog  # noqa: F401
+    img = next((im for im in st.images or [] if "busybox:latest" in (im.get("RepoTags") or [])), None)
+    if img:
+        rd = RunDialog(win, st, {"ref": "busybox:latest", "repo": "busybox", "tag": "latest", "id": img["Id"]})
+        rd.ports.set_text("18099:80")
+        rd.local.set_active(True)
+        rd.mem.set_value(256)
+        rd.hcmd.set_text("true")
+        rd.labels.set_text("team=qa")
+        cfg = rd.config()
+        hb_ = cfg["HostConfig"]
+        check("Run dialog builds every option into the request",
+              hb_["PortBindings"]["80/tcp"][0] == {"HostIp": "127.0.0.1", "HostPort": "18099"} and
+              hb_["Memory"] == 256 * 1024 * 1024 and cfg["Healthcheck"]["Test"] == ["CMD-SHELL", "true"] and
+              cfg["Labels"] == {"team": "qa"}, cfg)
+        rd.force_close()
+        from berth import build as bld
+        ctx = tempfile.mkdtemp(prefix="berth-test-build-")
+        with open(os.path.join(ctx, "Dockerfile"), "w") as f:
+            f.write("FROM busybox:latest\nCOPY hello.txt /\nCMD [\"cat\", \"/hello.txt\"]\n")
+        with open(os.path.join(ctx, "hello.txt"), "w") as f:
+            f.write("hi\n")
+        with open(os.path.join(ctx, "secret.key"), "w") as f:
+            f.write("nope\n")
+        with open(os.path.join(ctx, ".dockerignore"), "w") as f:
+            f.write("*.key\n")
+        log = []
+        try:
+            iid = yield from _in_thread(lambda: bld.api_build(st.engine, ctx, os.path.join(ctx, "Dockerfile"),
+                                                              "berth-selftest-build:1", on_line=log.append), 180)
+            check("Build: an image from a folder, through the engine API", bool(iid), "".join(log)[-200:])
+        except Exception as e:  # noqa: BLE001
+            check("Build: an image from a folder, through the engine API", False, e)
+        tar, _df = bld.context_tar(ctx, os.path.join(ctx, "Dockerfile"))
+        import tarfile as _tf
+        with _tf.open(tar) as t_:
+            members = t_.getnames()
+        os.remove(tar)
+        check("Build: .dockerignore keeps files out of the context", "secret.key" not in members and
+              "hello.txt" in members, members)
+        upd = yield from _in_thread(lambda: bld.check_updates(st.engine, st.images or []), 120)
+        check("Images: update check answers for every tag (True / False / unknown)",
+              set(upd) >= {t for im in st.images or [] for t in im.get("RepoTags") or [] if t != "<none>:<none>"},
+              {k: v for k, v in list(upd.items())[:4]})
 
     # 12. engine switching (Settings → Connected engine)
     sp = win.pages["settings"]

@@ -17,6 +17,48 @@ EVENTS = ["create", "destroy", "die", "kill", "oom", "pause", "unpause", "rename
           "remove"]
 
 
+class Watch:
+    """Turns engine events into the few that deserve a notification: a container that stopped on its own with an
+    error, ran out of memory, or became unhealthy. A stop / kill just before a "die" means someone stopped it — not
+    news. Each container gets at most one notification of a kind per 10 minutes (restart loops stay quiet)."""
+    QUIET = 600
+
+    def __init__(self):
+        self.expected, self.sent = {}, {}
+
+    def feed(self, ev, now=None):
+        if ev.get("Type") != "container":
+            return None
+        now = now or time.time()
+        cid = (ev.get("Actor") or {}).get("ID") or ev.get("id") or ""
+        attrs = (ev.get("Actor") or {}).get("Attributes") or {}
+        name = attrs.get("name") or cid[:12]
+        if any(k.startswith("io.github.subhadeeproy3902.berth") for k in attrs):
+            return None                               # Berth's own helpers
+        action = ev.get("Action") or ev.get("status") or ""
+        if action in ("stop", "kill", "destroy") or action.startswith("exec_"):
+            self.expected[cid] = now
+            return None
+        if action == "die":
+            code = str(attrs.get("exitCode", "0"))
+            if code == "0" or (cid in self.expected and now - self.expected[cid] < 30):
+                return None
+            kind, title = "die", f"{name} stopped unexpectedly"
+            body = f"Exit code {code}" + (" — killed, often because it ran out of memory" if code == "137" else "")
+        elif action == "oom":
+            self.expected[cid] = now                  # the "die" that follows is the same story
+            kind, title, body = "oom", f"{name} ran out of memory", "Docker stopped a process in it. Raise its memory " \
+                                                                       "limit in Edit, or find what uses the memory."
+        elif action.startswith("health_status") and action.endswith("unhealthy"):
+            kind, title, body = "unhealthy", f"{name} is unhealthy", "Its health check keeps failing. See its logs."
+        else:
+            return None
+        if (cid, kind) in self.sent and now - self.sent[(cid, kind)] < self.QUIET:
+            return None
+        self.sent[(cid, kind)] = now
+        return cid, title, body
+
+
 class Store(GObject.Object):
     __gsignals__ = {
         "engine": (GObject.SignalFlags.RUN_FIRST, None, (bool,)),
@@ -25,6 +67,7 @@ class Store(GObject.Object):
         "volumes": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "networks": (GObject.SignalFlags.RUN_FIRST, None, ()),
         "stats": (GObject.SignalFlags.RUN_FIRST, None, ()),
+        "trouble": (GObject.SignalFlags.RUN_FIRST, None, (str, str, str)),     # container id, title, body
     }
 
     def __init__(self, address=None):
@@ -34,6 +77,7 @@ class Store(GObject.Object):
         self.engine = Engine(address or None)
         os.environ["DOCKER_HOST"] = docker_host_env(self.engine.path)   # docker CLI calls (compose, exec…) follow along
         self.sampler = Sampler(self.engine, self._on_sample)
+        self.watch = Watch()
         self.up = None
         self.info = {}
         self.containers = []
@@ -53,6 +97,10 @@ class Store(GObject.Object):
         import os
         from .engine import docker_host_env
         self._events_gen += 1
+        old = self.engine.path
+        if old.startswith("ssh://") and old != address:
+            from .sshtunnel import close
+            close(old)                           # the old remote engine's tunnel isn't needed any more
         self.engine = Engine(address)
         self.sampler.engine = self.engine
         self.sampler.set_running({})
@@ -145,15 +193,19 @@ class Store(GObject.Object):
                 kinds = set()
                 for ln in lines:
                     try:
-                        kinds.add(json.loads(ln).get("Type"))
+                        ev = json.loads(ln)
                     except ValueError:
-                        pass
+                        continue
+                    kinds.add(ev.get("Type"))
+                    t = self.watch.feed(ev)
+                    if t:
+                        GLib.idle_add(lambda t=t: self.emit("trouble", *t) and False)
                 if kinds:
                     GLib.idle_add(self._on_events, kinds)
             st.close()
             time.sleep(1)
 
-    def _on_events(self, kinds):
+    def _on_events(self, kinds):  # noqa: D401
         m = {"container": "containers", "image": "images", "volume": "volumes", "network": "networks"}
         for k in kinds:
             what = m.get(k)

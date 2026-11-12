@@ -88,12 +88,27 @@ class SettingsPage(Gtk.Box):
         if IS_LINUX:                    # StatusNotifierItem trays are a Linux desktop thing
             pp.add(g3)
 
+        gn = Adw.PreferencesGroup(title="Notifications")
+        note = Adw.SwitchRow(title="Tell me when something goes wrong",
+                             subtitle="A desktop notification when a container stops unexpectedly, runs out of memory "
+                                      "or turns unhealthy, and when a backup fails. Shown only while Berth is running "
+                                      "(also in the tray).", active=bool(settings["notify"]))
+        note.connect("notify::active", lambda r, *_: settings.__setitem__("notify", r.get_active()))
+        gn.add(note)
+        upd = Adw.SwitchRow(title="Check for new versions of Berth",
+                            subtitle="Once a day Berth asks GitHub for the latest release — nothing about you or your "
+                                     "containers is sent.", active=bool(settings["update_check"]))
+        upd.connect("notify::active", lambda r, *_: settings.__setitem__("update_check", r.get_active()))
+        if not os.environ.get("FLATPAK_ID"):          # Flathub updates the Flatpak
+            gn.add(upd)
+        pp.add(gn)
+
         self.eng = Adw.PreferencesGroup(title="Docker Engine")
         self.endpoints = []
         self.engine_pick = Adw.ComboRow(title="Connected engine", subtitle="Docker, rootless Docker, Podman or a docker context")
         self.engine_pick.connect("notify::selected", self._pick_engine)
         self.eng.add(self.engine_pick)
-        self.custom = Adw.EntryRow(title="Other engine address (unix socket path or tcp://host:port)", show_apply_button=True)
+        self.custom = Adw.EntryRow(title="Other engine: a socket path, tcp://host:port or ssh://user@host", show_apply_button=True)
         self.custom.connect("apply", lambda e: self._switch(e.get_text().strip()))
         self.eng.add(self.custom)
         self.eng_state = Adw.ActionRow(title="Status")

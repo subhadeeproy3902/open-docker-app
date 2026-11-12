@@ -64,6 +64,7 @@ window.density-spacious { --page-x: 32px; --page-y: 22px; --row-y: 14px; --cell-
 .status-pill.warn { color: #c88800; background: alpha(#e5a50a, 0.16); }
 .status-pill.bad { color: #c01c28; background: alpha(#e01b24, 0.14); }
 .status-pill.muted { opacity: 0.7; }
+.status-pill.accent { color: @accent_color; background: alpha(@accent_bg_color, 0.16); }
 
 button.port { min-height: 24px; padding: 0 8px; font-family: monospace; font-size: 0.85em; border-radius: 7px;
               border: 1px solid alpha(currentColor, 0.15); }
@@ -218,3 +219,6 @@ tooltip label { font-size: 0.92em; }
 .sharing-page .table-card { margin: 0; }           /* body padding already sets the edges: align with the tiles */
 .name-badge { font-size: 0.72em; padding: 0 7px; }
 .pill-chip { padding: 2px 12px; min-height: 26px; border-radius: 99px; font-weight: 500; }
+.sidebar-find { margin: 2px 10px 6px 10px; padding: 6px 10px; border-radius: 8px; background: alpha(currentColor, 0.06); }
+.sidebar-find:hover { background: alpha(currentColor, 0.1); }
+.kbd-hint { padding: 0 5px; border-radius: 5px; border: 1px solid alpha(currentColor, 0.18); }

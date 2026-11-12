@@ -18,6 +18,31 @@ and the project uses [Semantic Versioning](https://semver.org/).
   Rename volume (stop users → copy → re-point → restart → delete old), Clone volume; database explorer renames
   tables/views/keys/collections and Postgres databases (only with "Allow changes").
 - Public links can **expire** (15 min … 1 week, or a date); Berth sweeps them, a systemd user timer is the backstop.
+- **Backups** page: back up a database (pg_dump, mysqldump, mongodump, Redis RDB) or a volume now or on a schedule
+  (hourly … weekly, keep the newest N), see every backup file, restore one. Runs while Berth is open (also in the
+  tray) and catches up missed ones; on Linux a user timer (`berth --run-backups`) also runs them while it is closed.
+- **Stacks** page: every Compose project — also ones taken down — with up / down / restart / pull-and-recreate, edit,
+  logs and folder. **Compose check** before running a file: syntax, unset variables, port clashes with containers
+  or other programs, taken container names, missing build folders, env files, external volumes and networks.
+- Database explorer: **edit a cell in place** (double-click), select several rows (Ctrl/Shift+click) to copy or
+  delete them, **export a whole table** to CSV / JSON, **import** CSV / JSON (add or replace, all or nothing).
+- Containers: **selection mode** — tick containers or whole stacks, then start / stop / restart / remove together.
+- **Notifications** when a container stops unexpectedly, runs out of memory or turns unhealthy, and when a backup
+  fails (Settings → Notifications).
+- **Run dialog with every common option**: network and alias, memory / CPU / GPU, health check, env file,
+  entrypoint, user, TTY, init, read-only, capabilities, privileged, labels, ports on this computer only.
+- Images: **Build…** from a folder with a Dockerfile (BuildKit through the docker CLI, the engine API without it,
+  .dockerignore honoured); **Check for updates** (daily) marks tags with a newer version; **Update** pulls it and
+  recreates the containers that use it with the same settings.
+- **Ctrl+K / ⌘K** (and a Search button in the sidebar): jump to any container, stack, image, volume, network,
+  database or page, or start a common task.
+- **Remote engines over SSH**: `ssh://user@host` in Settings — the system's OpenSSH and your keys, one tunnel per
+  engine, clear messages when keys or the remote socket are the problem.
+- **Update notice**: once a day Berth asks GitHub for the latest release and shows a banner (Settings → off; never
+  in the Flatpak).
+- `berth --self-test`; CI now runs every suite (app paths, click-everything, UI audit, SSH) and installs Berth with
+  `scripts/install.sh` on Fedora, Debian, Ubuntu, openSUSE and Arch, then opens every screen; the macOS and Windows
+  builds run the self-test.
 - **Edit data in the database explorer**: click a row to open it in a side panel with every value in full (type,
   key, NULL, pretty JSON, binary saved to a file); change values, add rows, delete rows — PostgreSQL and
   MySQL/MariaDB by primary key; Redis strings, hashes, lists, sets, sorted sets, streams, RedisJSON, plus new key,
@@ -44,6 +69,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
   status, exposure and Open / Start. The Berth logo is in the sidebar and on the engine-off screen.
 
 ### Fixed
+- **macOS**: keyboard shortcuts use ⌘ (they were Ctrl only). **Windows**: "Pull and recreate" no longer needs `sh`.
+  The macOS / Windows builds now bundle every module (some were imported lazily and could be missing).
 - **The database grid** looks and behaves like a SQL client: row numbers, columns sized to their content, the last
   one filling the width, horizontal scrolling, and a card only as tall as its rows. Rows are in primary-key order
   (they sorted as text, 1, 10, 11, 2, and moved after an edit). The first table opens by itself.

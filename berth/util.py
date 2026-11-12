@@ -189,7 +189,7 @@ class Settings:
                 "software": False, "range": 600, "page": "containers", "tray": False, "engine": "",
                 "text_scale": 100, "density": "comfortable", "strong_borders": False, "reduce_motion": False,
                 "large_icons": False, "db_history": {}, "routes": [], "proxy_ports": [80, 443],
-                "send_port": 8787}
+                "send_port": 8787, "backups": [], "notify": True, "update_check": True, "update_skip": "", "stacks": []}
 
     def __init__(self):
         self.path = os.path.join(GLib.get_user_config_dir(), "berth", "settings.json")

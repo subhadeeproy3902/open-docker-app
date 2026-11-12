@@ -4,17 +4,55 @@ import os
 from gi.repository import Adw, Gio, GLib, Gtk
 
 from .cli import CommandDialog
-from .util import confirm, esc, labels
+from .util import bg, confirm, esc, labels
+
+
+ICONS = {"error": "dialog-error-symbolic", "warning": "dialog-warning-symbolic", "info": "dialog-information-symbolic"}
+
+
+def show_checks(group, rows, results):
+    """Fill a preferences group with check results (rows are remembered so they can be cleared)."""
+    errors = sum(1 for lv, _m in results if lv == "error")
+    warns = sum(1 for lv, _m in results if lv == "warning")
+    group.set_description("Looks good — nothing in the way." if not results else
+                          f"{errors} problem{'s' if errors != 1 else ''}, {warns} warning{'s' if warns != 1 else ''}"
+                          if errors or warns else "Looks good.")
+    for lv, msg in results:
+        r = Adw.ActionRow(title=esc(msg), title_lines=4)
+        img = Gtk.Image(icon_name=ICONS[lv])
+        img.add_css_class({"error": "error", "warning": "warning", "info": "dim-label"}[lv])
+        r.add_prefix(img)
+        group.add(r)
+        rows.append(r)
+
+
+SETTINGS = None          # set by the app: remembered stacks live in settings["stacks"]
+
+
+def remember(project, wd, files):
+    """Keep a stack Berth started (or saw) so it stays on the Stacks page after `compose down`."""
+    if SETTINGS is None or not project or not files:
+        return
+    lst = [s for s in (SETTINGS["stacks"] or []) if s.get("project") != project]
+    SETTINGS["stacks"] = lst + [{"project": project, "wd": wd or os.path.dirname(files[0]), "files": list(files)}]
+
+
+def forget(project):
+    if SETTINGS is not None:
+        SETTINGS["stacks"] = [s for s in (SETTINGS["stacks"] or []) if s.get("project") != project]
 
 
 def project_info(containers, project):
-    """(working_dir, [config files]) for a compose project, from its containers' labels."""
+    """(working_dir, [config files]) for a compose project, from its containers' labels (or what Berth remembers)."""
     for c in containers:
         lab = labels(c)
         if lab.get("com.docker.compose.project") == project:
             wd = lab.get("com.docker.compose.project.working_dir", "")
             files = [f for f in (lab.get("com.docker.compose.project.config_files") or "").split(",") if f]
             return wd, files
+    for s in (SETTINGS["stacks"] or []) if SETTINGS is not None else []:
+        if s.get("project") == project:
+            return s.get("wd", ""), list(s.get("files") or [])
     return "", []
 
 
@@ -27,13 +65,19 @@ def compose_argv(project, wd, files, *verb):
     return a + list(verb)
 
 
-def run(win, store, project, verb_label, *verb):
+def run(win, store, project, verb_label, *verb, then=None):
     wd, files = project_info(store.containers, project)
     if not files or not all(os.path.exists(f) for f in files):
         win.toast(f"Compose file for {project} not found ({', '.join(files) or 'no label'})")
         return
+    remember(project, wd, files)
+
+    def done(ok):
+        store.refresh("containers")
+        if ok and then:
+            then()
     CommandDialog(win, f"{verb_label} · {project}", compose_argv(project, wd, files, *verb), cwd=wd or None,
-                  on_done=lambda ok: store.refresh("containers")).present(win)
+                  on_done=done).present(win)
 
 
 def up(win, store, project):
@@ -41,12 +85,13 @@ def up(win, store, project):
 
 
 def pull_up(win, store, project):
-    wd, files = project_info(store.containers, project)
-    if not files:
-        return win.toast("Compose file not found")
-    argv = ["sh", "-c", '"$@" pull --ignore-buildable && "$@" up -d', "sh"] + compose_argv(project, wd, files)
-    CommandDialog(win, f"Pull and recreate · {project}", argv, cwd=wd or None,
-                  on_done=lambda ok: store.refresh("containers")).present(win)
+    """Pull newer images, then recreate what changed — two steps, no shell (works on Windows too)."""
+    run(win, store, project, "Pull newer images", "pull", "--ignore-buildable",
+        then=lambda: run(win, store, project, "Recreate with the new images", "up", "-d", "--remove-orphans"))
+
+
+def restart(win, store, project):
+    run(win, store, project, "Restart", "restart")
 
 
 def down(win, store, project):
@@ -90,7 +135,7 @@ class ComposeEditor(Adw.Dialog):
         tv.set_content(box)
         self.set_child(tv)
         keys = Gtk.ShortcutController()
-        keys.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("<Control>s"),
+        keys.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("<Primary>s"),
                                        action=Gtk.CallbackAction.new(lambda *_: (self._save(), True)[1])))
         self.add_controller(keys)
         self._load()
@@ -160,6 +205,9 @@ class ComposeOpen(Adw.Dialog):
         for w in (self.file_row, self.name, self.build, self.pull, self.profiles):
             g.add(w)
         pp.add(g)
+        self.checks = Adw.PreferencesGroup(title="Check", visible=False)
+        pp.add(self.checks)
+        self._check_rows = []
         tv.set_content(pp)
         self.set_child(tv)
 
@@ -182,7 +230,20 @@ class ComposeOpen(Adw.Dialog):
             if not self.name.get_text():
                 self.name.set_text(os.path.basename(os.path.dirname(self.file)).lower().replace(" ", "-"))
             self.go.set_sensitive(True)
+            self._check()
         d.open(self.win, None, done)
+
+    def _check(self):
+        from . import compose_check
+        st = self.store
+        for r in self._check_rows:
+            self.checks.remove(r)
+        self._check_rows = []
+        self.checks.set_visible(True)
+        self.checks.set_description("Checking the file…")
+        name = self.name.get_text().strip() or None
+        bg(compose_check.check, [self.file], st.containers, st.volumes, st.networks, st.images, name,
+           done=lambda res: show_checks(self.checks, self._check_rows, res), error=lambda e: None)
 
     def _go(self):
         name = self.name.get_text().strip() or "stack"
@@ -195,5 +256,6 @@ class ComposeOpen(Adw.Dialog):
         if self.pull.get_active():
             argv += ["--pull", "always"]
         self.close()
+        remember(name, os.path.dirname(self.file), [self.file])
         CommandDialog(self.win, f"Compose up · {name}", argv, cwd=os.path.dirname(self.file),
                       on_done=lambda ok: self.store.refresh("containers")).present(self.win)

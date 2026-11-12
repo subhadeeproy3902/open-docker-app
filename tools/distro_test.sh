@@ -7,7 +7,7 @@
 #   sh tools/demo/up.sh && sh tools/distro_test.sh [fedora debian ubuntu opensuse arch]
 # Exit code 1 if any distro failed. Logs and screenshots: ${OUT:-/tmp/berth-distros}/<distro>/
 set -u
-cd "$(dirname "$0")/.."
+cd "$(dirname "$0")/.." || exit 1
 SRC="$(pwd)"
 OUT="${OUT:-/tmp/berth-distros}"
 mkdir -p "$OUT"

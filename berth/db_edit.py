@@ -633,13 +633,42 @@ class DocEdit(Editor):
             raise DbError("A document must be a JSON object: { … }")
         return doc
 
-    @staticmethod
-    def _field(doc, readonly=""):
-        return [Field("document", "JSON", json.dumps(doc, indent=2, ensure_ascii=False), json=True, nullable=False,
-                      readonly=readonly, multiline=True)]
+    def _field(self, doc, readonly=""):
+        """One field per top-level key, like a table row: text as text, everything else as JSON."""
+        self._raw = dict(doc or {})
+        out = []
+        for k, v in (doc or {}).items():
+            if isinstance(v, str):
+                out.append(Field(k, "text", v, multiline=True, readonly=readonly))
+            else:
+                kind = ("number" if isinstance(v, (int, float)) and not isinstance(v, bool) else
+                        "true / false" if isinstance(v, bool) else "null" if v is None else "JSON")
+                out.append(Field(k, kind, None if v is None else json.dumps(v, indent=2, ensure_ascii=False),
+                                 json=isinstance(v, (dict, list)), multiline=isinstance(v, (dict, list)),
+                                 readonly=readonly or ("The document's id" if k == "_id" else "")))
+        return out
+
+    def _merge(self, node, ident, values):
+        """The stored document with the edited fields put in (text stays text, the rest is read as JSON)."""
+        self.fetch(node, ident)
+        doc = dict(self._raw)
+        for k, text in values.items():
+            if text is None:
+                doc[k] = None
+            elif isinstance(doc.get(k), str) or k not in doc:
+                doc[k] = text
+            else:
+                try:
+                    doc[k] = json.loads(text)
+                except ValueError as e:
+                    raise DbError(f"{k}: that isn't a valid value ({e})")
+        return doc
+
+    def _doc_or_merge(self, node, ident, values):
+        return self._doc(values) if ident is None or "document" in values else self._merge(node, ident, values)
 
     def blank(self, node):
-        return self._field({})
+        return [Field("document", "JSON — the new document", "{\n  \n}", json=True, nullable=False, multiline=True)]
 
 
 class MongoEdit(DocEdit):
@@ -681,7 +710,7 @@ class MongoEdit(DocEdit):
 
     def save(self, node, ident, values, allow):
         self._ok(allow)
-        doc = self._doc(values)
+        doc = self._doc_or_merge(node, ident, values)
         if ident is None:
             self._run(f"print(EJSON.stringify({self._c(node)}.insertOne(EJSON.parse(__D)).insertedId))", doc)
             return "Document added"
@@ -725,7 +754,7 @@ class OpenSearchEdit(DocEdit):
 
     def save(self, node, ident, values, allow):
         self._ok(allow)
-        doc = self._doc(values)
+        doc = self._doc_or_merge(node, ident, values)
         if ident is None:
             self.b.http.json("POST", f"/{_q(node.ref)}/_doc?refresh=true", doc)
             return "Document added"
@@ -755,7 +784,7 @@ class TypesenseEdit(DocEdit):
 
     def save(self, node, ident, values, allow):
         self._ok(allow)
-        doc = self._doc(values)
+        doc = self._doc_or_merge(node, ident, values)
         if ident is None:
             self.b.http.json("POST", self._p(node), doc)
             return "Document added"
@@ -802,7 +831,7 @@ class MeiliEdit(DocEdit):
 
     def save(self, node, ident, values, allow):
         self._ok(allow)
-        doc = self._doc(values)
+        doc = self._doc_or_merge(node, ident, values)
         if ident is not None:
             doc.setdefault(self.id_field, ident[self.id_field])
         elif self.id_field not in doc:
@@ -854,7 +883,7 @@ class VespaEdit(DocEdit):
 
     def save(self, node, ident, values, allow):
         self._ok(allow)
-        doc = self._doc(values)
+        doc = self._doc_or_merge(node, ident, values)
         if ident is None:
             local = doc.pop("id", None)
             if not local:
@@ -862,7 +891,8 @@ class VespaEdit(DocEdit):
             ns = self._namespace(node)
             self.b.http.json("POST", f"/document/v1/{_q(ns)}/{_q(node.ref)}/docid/{_q(local)}", {"fields": doc})
             return "Document added"
-        self.b.http.json("PUT", self._path(ident["id"]), {"fields": {k: {"assign": v} for k, v in doc.items()}})
+        changed = {k: doc[k] for k in values if k in doc}           # only what was edited (not the big tensors)
+        self.b.http.json("PUT", self._path(ident["id"]), {"fields": {k: {"assign": v} for k, v in changed.items()}})
         return "Saved"
 
     def _namespace(self, node):

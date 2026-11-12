@@ -69,6 +69,8 @@ and the project uses [Semantic Versioning](https://semver.org/).
   status, exposure and Open / Start. The Berth logo is in the sidebar and on the engine-off screen.
 
 ### Fixed
+- The volume page header no longer overflows a 1024 px window (Import, Clone and Rename moved into ⋮). CI fails
+  on any layout wider than the window.
 - **macOS**: keyboard shortcuts use ⌘ (they were Ctrl only). **Windows**: "Pull and recreate" no longer needs `sh`.
   The macOS / Windows builds now bundle every module (some were imported lazily and could be missing).
 - **The database grid** looks and behaves like a SQL client: row numbers, columns sized to their content, the last

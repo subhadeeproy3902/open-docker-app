@@ -1216,11 +1216,21 @@ class VolumeDetail(Adw.NavigationPage):
         hb = Adw.HeaderBar()
         self.wt = Adw.WindowTitle(title=d["name"], subtitle=("Used by " + ", ".join(d["used"])) if d["used"] else "Not used by any container")
         hb.set_title_widget(self.wt)
-        for lbl, tip, fn in (("Rename…", "Give the volume a new name (containers using it are switched over)",
-                              self._rename),
-                             ("Clone…", "Copy everything into a new volume", self._clone),
-                             ("Import…", "Unpack a .tar / .tar.gz into this volume", self._import),
-                             ("Export…", "Save the volume's files as a .tar.gz", self._export),
+        # two buttons and a menu: the header must fit a 1024 px window (five labelled buttons didn't)
+        menu = Gio.Menu()
+        menu.append("Import a .tar / .tar.gz…", "vol.import")
+        menu.append("Clone into a new volume…", "vol.clone")
+        menu.append("Rename…", "vol.rename")
+        more = Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=menu,
+                              tooltip_text="Import, clone or rename this volume")
+        hb.pack_end(more)
+        ag = Gio.SimpleActionGroup()
+        for name, fn in (("import", self._import), ("clone", self._clone), ("rename", self._rename)):
+            a = Gio.SimpleAction.new(name, None)
+            a.connect("activate", lambda *_a, f=fn: f())
+            ag.add_action(a)
+        self.insert_action_group("vol", ag)
+        for lbl, tip, fn in (("Export…", "Save the volume's files as a .tar.gz", self._export),
                              ("Schedule backups…", "Back up this volume every hour, day or week", self._schedule)):
             b = Gtk.Button(label=lbl, tooltip_text=tip)
             b.connect("clicked", lambda *_, f=fn: f())

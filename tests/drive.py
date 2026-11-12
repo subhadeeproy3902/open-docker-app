@@ -689,9 +689,10 @@ def scenario(app):
         os.remove(tar)
         check("Build: .dockerignore keeps files out of the context", "secret.key" not in members and
               "hello.txt" in members, members)
-        upd = yield from _in_thread(lambda: bld.check_updates(st.engine, st.images or []), 120)
+        imgs = list(st.images or [])                # one list: the build above may refresh st.images meanwhile
+        upd = yield from _in_thread(lambda: bld.check_updates(st.engine, imgs), 120)
         check("Images: update check answers for every tag (True / False / unknown)",
-              set(upd) >= {t for im in st.images or [] for t in im.get("RepoTags") or [] if t != "<none>:<none>"},
+              set(upd) >= {t for im in imgs for t in im.get("RepoTags") or [] if t != "<none>:<none>"},
               {k: v for k, v in list(upd.items())[:4]})
 
     # 12. engine switching (Settings → Connected engine)

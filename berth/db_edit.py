@@ -829,6 +829,12 @@ class MeiliEdit(DocEdit):
 class VespaEdit(DocEdit):
     id_field = "id"
 
+    def ident(self, node, r, pos):
+        """The real document id (id:ns:type::x): a schema field called "id" can hide the hit's id in the grid."""
+        d = r.docs[pos]
+        did = d.get("documentid")
+        return {"id": did if str(did or "").startswith("id:") else d.get("id")}
+
     @staticmethod
     def _path(docid):
         """id:namespace:doctype::local  →  /document/v1/namespace/doctype/docid/local"""

@@ -10,7 +10,7 @@ from berth import app as A
 
 OUT = sys.argv[1]; THEME = sys.argv[2] if len(sys.argv) > 2 else "dark"
 os.makedirs(OUT, exist_ok=True)
-PAGES = ["containers", "images", "volumes", "networks", "logs", "builds", "cache", "resources", "disk", "kubernetes", "settings"]
+PAGES = ["containers", "images", "volumes", "networks", "databases", "sharing", "send", "logs", "builds", "cache", "resources", "disk", "kubernetes", "settings"]
 
 
 def grab(win, name):

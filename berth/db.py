@@ -30,11 +30,60 @@ import urllib.parse
 ROW_LIMIT = 200            # rows per page when browsing
 QUERY_ROWS = 2000          # most rows shown for a query
 OUT_LIMIT = 16 * 1024 * 1024
+CELL_MAX = 4000            # characters of one value shown in the grid (the rest is summarised)
+csv.field_size_limit(OUT_LIMIT * 2)         # psql may send one huge field; the default limit is 128 KB
+
+
+def cap(v):
+    """One cell, safe to show: long text cut with its real length noted, binary summarised."""
+    if v is None:
+        return None
+    if isinstance(v, (bytes, bytearray, memoryview)):
+        return f"‹binary · {_size(len(bytes(v)))}›"
+    v = v if isinstance(v, str) else str(v)
+    if len(v) > CELL_MAX + 64:                       # margin: a value the server already cut keeps its note
+        return v[:CELL_MAX] + f"… [{len(v):,} characters]"
+    return v
+
+
+def _csv_rows(text):
+    """Parse psql --csv output; if the output was cut mid-record, keep every complete record before it."""
+    rows, reader = [], csv.reader(io.StringIO(text))
+    while True:
+        try:
+            rows.append(next(reader))
+        except StopIteration:
+            return rows, False
+        except csv.Error:
+            return rows, True
+
+
+def _shrinking(fn, node, offset, limit):
+    """Fetch a page; if the reply is too large (huge documents), try again with fewer rows and say so."""
+    last = None
+    for n in [limit] + [x for x in (50, 10, 1) if x < limit]:
+        try:
+            r = fn(node, offset, n)
+            r.page = n
+            if n < limit:
+                r.note = (r.note + " · " if r.note else "") + f"{n} per page — these documents are large"
+            return r
+        except DbError as e:
+            if "too large" not in str(e).lower():
+                raise
+            last = e
+    raise last
 NULL = "\u2400"            # how psql marks NULL (an empty string stays an empty string)
 
 
 class DbError(Exception):
-    pass
+    """An error to show the user. Messages are capped: a failing command must never dump megabytes into the UI."""
+
+    def __init__(self, msg=""):
+        msg = str(msg)
+        if len(msg) > 1200:
+            msg = msg[:1200] + f"… [{len(msg):,} characters]"
+        super().__init__(msg)
 
 
 class Result:
@@ -178,7 +227,7 @@ def docs_result(docs, note="", truncated=False):
         for k in f:
             if k not in cols:
                 cols.append(k)
-    return Result(cols, [[f.get(c) for c in cols] for f in flat], note, truncated)
+    return Result(cols, [[cap(f.get(c)) for c in cols] for f in flat], note, truncated)
 
 
 class Backend:
@@ -224,6 +273,20 @@ class Backend:
 
     def is_destructive(self, text):
         return bool(DANGER_SQL.search(text or ""))
+
+    def richest(self, dbs):
+        """The database that actually holds data (used when the default one is empty), or None."""
+        return None
+
+    def can_rename(self, node):
+        return False
+
+    def rename(self, node, new, allow_write=False):
+        raise DbError("Renaming isn't supported here")
+
+    def _need_write(self, allow_write):
+        if not allow_write:
+            raise DbError("Renaming changes the database. Switch on “Allow changes” first.")
 
     # helpers
     def running(self):
@@ -296,7 +359,7 @@ class Postgres(Backend):
         cmd = ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "--csv", "-P", f"null={NULL}", "-U", self.user,
                "-d", db or self.db, "-c", sql]
         code, out, err, trunc = self.exec(cmd, env=env, timeout=90)
-        if code != 0:
+        if code != 0 and not trunc:          # when we stop reading a huge reply, psql exits non-zero: not an error
             msg = err.strip() or out.strip() or "psql failed"
             if "read-only transaction" in msg:
                 msg += "\n\nBerth is in read-only mode. Switch on “Allow changes” to modify data."
@@ -305,13 +368,14 @@ class Postgres(Backend):
 
     def _rows(self, sql, readonly=True, db=None):
         out, trunc = self._psql(sql, readonly, db)
-        if trunc:                   # drop a half-received last line
-            out = out[:out.rfind("\n") + 1]
-        rows = list(csv.reader(io.StringIO(out)))
+        rows, cut = _csv_rows(out)
+        if (trunc or cut) and len(rows) > 1:      # the last record may be incomplete
+            rows = rows[:-1]
         if not rows:
             return Result(note="Done.")
-        cols, data = rows[0], [[None if v == NULL else v for v in r] for r in rows[1:]]
-        return Result(cols, data[:QUERY_ROWS], truncated=trunc or len(data) > QUERY_ROWS)
+        cols, data = rows[0], [[None if v == NULL else cap(v) for v in r] for r in rows[1:]]
+        note = "The reply was too large to show completely — showing the first rows." if trunc or cut else ""
+        return Result(cols, data[:QUERY_ROWS], note=note, truncated=trunc or cut or len(data) > QUERY_ROWS)
 
     def connect(self):
         if self.password is None:
@@ -338,8 +402,10 @@ class Postgres(Backend):
             label = {"v": "view", "m": "materialized view", "f": "foreign table"}.get(kind)
             # reltuples is -1 until the table is first analysed: then show only the size, not a wrong "0 rows"
             detail = label or (f"≈ {int(est):,} rows · {size}" if int(est) >= 0 else size)
-            schemas.setdefault(nsp, []).append(Node(rel, "table", (nsp, rel), detail,
-                                                    icon="view-grid-symbolic" if kind in "rp" else "view-list-symbolic"))
+            node = Node(rel, "table", (nsp, rel), detail,
+                        icon="view-grid-symbolic" if kind in "rp" else "view-list-symbolic")
+            node.relkind = kind
+            schemas.setdefault(nsp, []).append(node)
         empty = self._rows("select nspname from pg_namespace where nspname not in ('pg_catalog','information_schema') "
                            "and nspname not like 'pg_toast%' and nspname not like 'pg_temp%'").rows
         for (nsp,) in empty:
@@ -353,8 +419,22 @@ class Postgres(Backend):
 
     @_timed
     def browse(self, node, offset=0, limit=ROW_LIMIT):
+        """Long values are cut and binary summarised by Postgres itself, so a 59 MB blob column never travels."""
         s, t = node.ref
-        return self._rows(f"select * from {_qi(s)}.{_qi(t)} limit {int(limit)} offset {int(offset)}")
+        cols = self._rows(f"select a.attname, format_type(a.atttypid, a.atttypmod) from pg_attribute a "
+                          f"where a.attrelid = {_ql(_qi(s) + '.' + _qi(t))}::regclass and a.attnum > 0 "
+                          f"and not a.attisdropped order by a.attnum").rows
+        exprs = []
+        for name, typ in cols:
+            q = _qi(name)
+            if typ == "bytea":
+                exprs.append(f"case when {q} is null then null else '‹binary · ' || "
+                             f"pg_size_pretty(octet_length({q})::bigint) || '›' end as {q}")
+            else:
+                exprs.append(f"case when length({q}::text) > {CELL_MAX} then left({q}::text, {CELL_MAX}) || '… [' || "
+                             f"to_char(length({q}::text), 'FM999,999,999,999') || ' characters]' else {q}::text end as {q}")
+        sel = ", ".join(exprs) or "*"
+        return self._rows(f"select {sel} from {_qi(s)}.{_qi(t)} limit {int(limit)} offset {int(offset)}")
 
     @_timed
     def structure(self, node):
@@ -383,6 +463,44 @@ class Postgres(Backend):
 
     def example(self):
         return "select * from pg_stat_activity limit 20;"
+
+    def richest(self, dbs):
+        best, most = None, 0
+        for d in dbs:
+            try:
+                n = int(self._rows("select count(*) from pg_class c join pg_namespace n on n.oid = c.relnamespace "
+                                   "where c.relkind in ('r','p','v','m') and n.nspname not in "
+                                   "('pg_catalog','information_schema') and n.nspname not like 'pg_toast%'",
+                                   db=d).rows[0][0])
+            except DbError:
+                continue
+            if n > most:
+                best, most = d, n
+        return best
+
+    def can_rename(self, node):
+        return node.kind in ("table", "schema", "database")
+
+    def rename(self, node, new, allow_write=False):
+        self._need_write(allow_write)
+        if node.kind == "schema":
+            self._rows(f"alter schema {_qi(node.ref)} rename to {_qi(new)}", readonly=False)
+        elif node.kind == "database":         # can't rename the database you are connected to: connect elsewhere
+            other = "postgres" if node.ref != "postgres" else "template1"
+            try:
+                self._rows(f"alter database {_qi(node.ref)} rename to {_qi(new)}", readonly=False, db=other)
+            except DbError as e:
+                if "being accessed by other users" in str(e):
+                    raise DbError(f"“{node.ref}” is in use by running services. Stop the containers that use it, "
+                                  "then rename it.")
+                raise
+            if self.db == node.ref:
+                self.db = new
+        else:
+            s, t = node.ref
+            what = {"v": "view", "m": "materialized view", "f": "foreign table"}.get(getattr(node, "relkind", "r"),
+                                                                                       "table")
+            self._rows(f"alter {what} {_qi(s)}.{_qi(t)} rename to {_qi(new)}", readonly=False)
 
 
 # ── MySQL / MariaDB ─────────────────────────────────────────────────────────────────────────────────────────────
@@ -432,7 +550,7 @@ class MySQL(Backend):
         if db or self.db:
             cmd.append(f"--database={db or self.db}")
         code, out, err, trunc = self.exec(cmd + ["-e", sql], env={"MYSQL_PWD": self.password or ""}, timeout=90)
-        if code != 0:
+        if code != 0 and not trunc:
             msg = err.strip() or "query failed"
             if "READ ONLY" in msg.upper():
                 msg += "\n\nBerth is in read-only mode. Switch on “Allow changes” to modify data."
@@ -445,8 +563,9 @@ class MySQL(Backend):
         if not lines:
             return Result(note="Done.")
         cols = lines[0].split("\t")
-        rows = [[_unescape_batch(v) for v in ln.split("\t")] for ln in lines[1:]]
-        return Result(cols, rows[:QUERY_ROWS], truncated=trunc or len(rows) > QUERY_ROWS)
+        rows = [[cap(_unescape_batch(v)) for v in ln.split("\t")] for ln in lines[1:]]
+        note = "The reply was too large to show completely — showing the first rows." if trunc else ""
+        return Result(cols, rows[:QUERY_ROWS], note=note, truncated=trunc or len(rows) > QUERY_ROWS)
 
     def connect(self):
         if self.password is None:
@@ -472,7 +591,19 @@ class MySQL(Backend):
 
     @_timed
     def browse(self, node, offset=0, limit=ROW_LIMIT):
-        return self._run(f"select * from {_bq(node.ref)} limit {int(offset)}, {int(limit)}")
+        cols = self._run(f"select column_name, data_type from information_schema.columns where table_schema = "
+                         f"database() and table_name = '{node.ref.replace(chr(39), chr(39) * 2)}' "
+                         f"order by ordinal_position").rows
+        exprs = []
+        for name, typ in cols:
+            q = _bq(name)
+            if (typ or "").lower() in ("blob", "tinyblob", "mediumblob", "longblob", "binary", "varbinary", "bit"):
+                exprs.append(f"IF({q} IS NULL, NULL, CONCAT('‹binary · ', OCTET_LENGTH({q}), ' bytes›')) AS {q}")
+            else:
+                exprs.append(f"IF(CHAR_LENGTH({q}) > {CELL_MAX}, CONCAT(LEFT({q}, {CELL_MAX}), '… [', "
+                             f"CHAR_LENGTH({q}), ' characters]'), {q}) AS {q}")
+        sel = ", ".join(exprs) or "*"
+        return self._run(f"select {sel} from {_bq(node.ref)} limit {int(offset)}, {int(limit)}")
 
     @_timed
     def structure(self, node):
@@ -503,6 +634,21 @@ class MySQL(Backend):
 
     def example(self):
         return "show processlist;"
+
+    def richest(self, dbs):
+        if not dbs:
+            return None
+        names = ",".join("'" + d.replace("'", "''") + "'" for d in dbs)
+        r = self._run(f"select table_schema, count(*) n from information_schema.tables where table_schema in ({names}) "
+                      "group by 1 order by 2 desc limit 1", db="")
+        return r.rows[0][0] if r.rows else None
+
+    def can_rename(self, node):
+        return node.kind == "table"
+
+    def rename(self, node, new, allow_write=False):
+        self._need_write(allow_write)
+        self._run(f"rename table {_bq(node.ref)} to {_bq(new)}")
 
 
 # ── Redis / Valkey ──────────────────────────────────────────────────────────────────────────────────────────────
@@ -612,9 +758,22 @@ class Redis(Backend):
         t = t.get("ok", t) if isinstance(t, dict) else t
         a, b = int(offset), int(offset) + int(limit) - 1
         if t == "string":
+            n = int(self._val("STRLEN", key) or 0)
+            if n > 65536:                                   # don't pull a huge value across: show its start
+                v = self._val("GETRANGE", key, "0", "65535")
+                return Result(["value"], [[cap(v)]], note=f"string · {n:,} bytes (showing the start)")
             v = self._val("GET", key)
             return Result(["value"], [[v]], note=f"string · {len(v or ''):,} characters")
         if t == "hash":
+            hl = int(self._val("HLEN", key) or 0)
+            if hl > 2000:                                   # a huge hash: one HSCAN page instead of HGETALL
+                out = self._val("HSCAN", key, "0", "COUNT", "1000")
+                items = out[1] if isinstance(out, list) and len(out) == 2 else []
+                if isinstance(items, dict):
+                    items = [x for kv in items.items() for x in kv]
+                pairs = list(zip(items[::2], items[1::2]))[:limit]
+                return Result(["field", "value"], [[cap(a), cap(b)] for a, b in pairs],
+                              note=f"hash · {hl:,} fields (showing a sample of {len(pairs)})", truncated=True)
             v = self._val("HGETALL", key)
             pairs = list(v.items()) if isinstance(v, dict) else list(zip(v[::2], v[1::2]))
             return Result(["field", "value"], [list(p) for p in pairs[offset:offset + limit]],
@@ -646,6 +805,8 @@ class Redis(Backend):
             return Result(["id", "fields"], rows, note=f"stream · {self._val('XLEN', key)} entries")
         if t in ("ReJSON-RL", "json"):
             v = self._val("JSON.GET", key)
+            if isinstance(v, str) and len(v) > 1_000_000:
+                return Result(text=v[:200_000] + f"\n… [{len(v):,} characters]", note="JSON document (start)")
             return Result(text=_pretty(v), note="JSON document")
         if t == "none":
             raise DbError("This key no longer exists")
@@ -690,6 +851,15 @@ class Redis(Backend):
 
     def example(self):
         return "INFO memory"
+
+    def can_rename(self, node):
+        return node.kind == "key"
+
+    def rename(self, node, new, allow_write=False):
+        self._need_write(allow_write)
+        out, _t = self._cli("RENAMENX", node.ref, new, raw=True)
+        if out.strip() == "0":
+            raise DbError(f"A key called “{new}” already exists")
 
 
 _REDIS_ICON = {"string": "text-x-generic-symbolic", "hash": "view-list-symbolic", "list": "view-list-ordered-symbolic",
@@ -779,6 +949,8 @@ class Mongo(Backend):
             env.update(BERTH_U=self.user, BERTH_P=self.password)
         cmd = ["mongosh", "mongodb://127.0.0.1:27017/" + self.db, "--quiet", "--norc", "--eval", MONGO_AUTH + js]
         code, out, err, trunc = self.exec(cmd, env=env or None, timeout=timeout)
+        if trunc:                            # we stopped reading; mongosh then exits non-zero — not a real error
+            raise DbError("The reply is too large to show at once")
         if code != 0:
             if "executable file not found" in (err + out) or code == 127:
                 raise DbError("This image has no mongosh (MongoDB 6 or newer images include it)")
@@ -860,6 +1032,20 @@ class Mongo(Backend):
 
     def example(self):
         return "db.getCollectionNames()"
+
+    def richest(self, dbs):
+        r = self._js("print(EJSON.stringify(db.adminCommand({listDatabases: 1}).databases"
+                     ".map(d => [d.name, d.sizeOnDisk])))")
+        sizes = [(int(sz or 0), n) for n, sz in r if n in dbs]
+        return max(sizes)[1] if sizes else None
+
+    def can_rename(self, node):
+        return node.kind == "collection"
+
+    def rename(self, node, new, allow_write=False):
+        self._need_write(allow_write)
+        self._js(f"print(EJSON.stringify(db.getCollection({json.dumps(node.ref)}).renameCollection("
+                 f"{json.dumps(new)})))")
 
 
 # ── HTTP engines ────────────────────────────────────────────────────────────────────────────────────────────────
@@ -958,6 +1144,8 @@ class Http:
 
     def json(self, method, path, body=None, timeout=30):
         status, text = self.request(method, path, body, timeout)
+        if len(text) >= OUT_LIMIT - 1:
+            raise DbError("The reply is too large to show at once")
         try:
             data = json.loads(text) if text.strip() else None
         except ValueError:
@@ -1381,7 +1569,7 @@ class SQLite(Backend):
             return Result(note="Done.")
         cols = [d[0] for d in cur.description]
         rows = cur.fetchmany(QUERY_ROWS + 1)
-        return Result(cols, [[None if v is None else (v.hex() if isinstance(v, bytes) else str(v)) for v in r]
+        return Result(cols, [[cap(v) for v in r]
                              for r in rows[:QUERY_ROWS]], truncated=len(rows) > QUERY_ROWS)
 
     @_timed

@@ -180,11 +180,12 @@ class ResultGrid(Gtk.Box):
 
 # ── explorer (one database container) ───────────────────────────────────────────────────────────────────────────
 class Explorer(Gtk.Box):
-    def __init__(self, page, backend, title, on_close=None):
+    def __init__(self, page, backend, title, on_close=None, embedded=False):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.page, self.win, self.b = page, page.win, backend
         self.on_close = on_close
         self.node, self.offset, self.gen, self.allow = None, 0, 0, False
+        self._picked_db = False
         self._struct_for = None
         tv = Adw.ToolbarView(vexpand=True)
         self.header = PageHeader(title, "Connecting…")
@@ -202,7 +203,31 @@ class Explorer(Gtk.Box):
             self.wbox = wbox
             self.header.add(wbox)
         self.header.add(icon_button("view-refresh-symbolic", "Reload", lambda *_: self.reload()))
-        flat_page(tv, self.header)
+        if backend.kind != "sqlite":
+            menu = Gio.Menu()
+            if backend.kind == "postgres":
+                menu.append("Rename this database…", "dbx.renamedb")
+            sec = Gio.Menu()
+            sec.append("Rename the container…", "dbx.renamectr")
+            sec.append("Change the container's ports…", "dbx.ports")
+            menu.append_section(None, sec)
+            mb = Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=menu, tooltip_text="More",
+                                valign=Gtk.Align.CENTER)
+            mb.add_css_class("flat")
+            self.header.add(mb)
+            from . import quick
+            ag = Gio.SimpleActionGroup()
+            for n, fn in (("renamedb", self._rename_db),
+                          ("renamectr", lambda: quick.rename_container(self.win, page.store, backend.cid)),
+                          ("ports", lambda: quick.PortsDialog(self.win, page.store, backend.cid).present(self.win))):
+                a = Gio.SimpleAction.new(n, None)
+                a.connect("activate", lambda *_a, f=fn: f())
+                ag.add_action(a)
+            self.insert_action_group("dbx", ag)
+        if embedded:                                   # inside a container's Database tab: no second header bar
+            tv.add_top_bar(self.header)
+        else:
+            flat_page(tv, self.header)
 
         paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL, position=280, shrink_start_child=False,
                           resize_start_child=False, vexpand=True, css_classes=["db-paned"])
@@ -239,6 +264,10 @@ class Explorer(Gtk.Box):
         top = Adw.WrapBox(child_spacing=8, line_spacing=6)
         self.node_lbl = label("Pick a table on the left", css=["heading"])
         top.append(self.node_lbl)
+        self.ren = Gtk.Button(label="Rename…", visible=False, valign=Gtk.Align.CENTER)
+        self.ren.add_css_class("flat")
+        self.ren.connect("clicked", lambda *_: self._rename_node())
+        top.append(self.ren)
         if backend.kind == "mongo":
             self.mfilter = Gtk.Entry(placeholder_text='Filter, e.g. {"status": "active"}', width_chars=34)
             self.mfilter.add_css_class("monospace")
@@ -301,12 +330,25 @@ class Explorer(Gtk.Box):
         def work():
             desc = self.b.connect()
             dbs = self.b.databases() if self.b.multi_db else []
-            return desc, dbs, self.b.tree()
+            nodes = self.b.tree()
+            moved = None
+            # The default database is often empty while the data lives in another one (one database per service):
+            # open the one that holds data, unless the user picked a database themselves.
+            if dbs and len(dbs) > 1 and not self._picked_db and not self._has_leaves(nodes):
+                best = self.b.richest(dbs)
+                if best and str(best) != str(self.b.db):
+                    moved = self.b.db
+                    self.b.db = best
+                    nodes = self.b.tree()
+            return desc, dbs, nodes, moved
 
         def done(r):
             if g != self.gen:
                 return
-            desc, dbs, nodes = r
+            desc, dbs, nodes, moved = r
+            if moved is not None:
+                self.win.toast(f"“{moved}” is empty — showing “{self.b.db}”, which has data. Switch databases at "
+                               "the top right.")
             self.desc = desc
             self.header.set_subtitle(f"{desc}" + (f" · database {self.b.db}" if self.b.db and self.b.kind != "redis"
                                                   else f" · db {self.b.db}" if self.b.kind == "redis" else ""))
@@ -337,18 +379,57 @@ class Explorer(Gtk.Box):
             self.tree_note.set_text("")
         bg(work, done=done, error=fail)
 
+    def _has_leaves(self, nodes):
+        return any(n.leaf or self.b.children(n) for n in nodes)
+
     def _db_changed(self, *_):
         if getattr(self, "_setting_db", False):
             return
         i = self.db_pick.get_selected()
         dbs = getattr(self, "_dbs", [])
         if 0 <= i < len(dbs) and dbs[i] != str(self.b.db):
+            self._picked_db = True
             self.b.db = dbs[i]
             self.node = None
             self.reload()
 
+    def _sync_rename(self):
+        n = self.node
+        self.ren.set_visible(bool(n) and self.b.can_rename(n))
+        self.ren.set_sensitive(self.allow)
+        self.ren.set_tooltip_text("Rename" if self.allow else "Switch on “Allow changes” to rename")
+
+    def _rename_node(self):
+        from .quick import _ask
+        n = self.node
+        what = {"table": "table", "key": "key", "collection": "collection"}.get(n.kind, n.kind)
+
+        def go(new):
+            def done(_r):
+                self.win.toast(f"Renamed to {new}")
+                self.node = None
+                self.reload()
+            bg(self.b.rename, n, new, self.allow, done=done, error=lambda e: self.win.toast(f"Not renamed: {e}"))
+        _ask(self.win, f"Rename {what}", "Applications that use the old name will stop finding it.", n.label,
+             "Rename", go)
+
+    def _rename_db(self):
+        from .quick import _ask
+        if not self.allow:
+            self.win.toast("Switch on “Allow changes” first")
+            return
+        node = db.Node(str(self.b.db), "database", str(self.b.db))
+
+        def go(new):
+            bg(self.b.rename, node, new, True, done=lambda _r: (self.win.toast(f"Database renamed to {new}"),
+                                                                 self.reload()),
+               error=lambda e: self.win.toast(f"Not renamed: {e}"))
+        _ask(self.win, "Rename database", "Postgres only allows this while nothing is connected to it: stop the "
+             "services that use it first.", str(self.b.db), "Rename", go)
+
     def _toggle_write(self, sw, _p):
         self.allow = sw.get_active()
+        self._sync_rename()
         if self.allow:
             self.wbox.add_css_class("on")
             self.win.toast("Changes allowed on this database until you leave this page")
@@ -431,6 +512,7 @@ class Explorer(Gtk.Box):
     def _open(self, node):
         self.node = node
         self.node_lbl.set_text(node.label)
+        self._sync_rename()
         self._load_data()
         self._struct_for = None
         if self.views.get_visible_child_name() == "structure":
@@ -448,7 +530,8 @@ class Explorer(Gtk.Box):
             if g != self.gen:
                 return
             self.data.show(r)
-            lim = db.ROW_LIMIT
+            lim = getattr(r, "page", db.ROW_LIMIT)
+            self.page_size = lim
             shown = len(r.rows)
             self.range.set_text(f"rows {off + 1:,}–{off + shown:,}" if shown else "")
             self.prev.set_sensitive(off > 0)
@@ -457,11 +540,11 @@ class Explorer(Gtk.Box):
         def fail(e):
             if g == self.gen:
                 self.data.error(e)
-        bg(self.b.browse, node, off, db.ROW_LIMIT, done=done, error=fail)
+        bg(db._shrinking, self.b.browse, node, off, db.ROW_LIMIT, done=done, error=fail)
 
     def _page(self, d):
         if self.node:
-            self.offset = max(0, self.offset + d * db.ROW_LIMIT)
+            self.offset = max(0, self.offset + d * getattr(self, "page_size", db.ROW_LIMIT))
             self._load_data()
 
     def _apply_filter(self):
@@ -559,7 +642,16 @@ class DatabasesPage(TablePage):
         super().__init__(win, store, settings)
         self.wtitle.set_subtitle("Browse and query the databases in your containers — read-only unless you allow "
                                  "changes")
-        store.connect("containers", lambda *_: self.on_show())
+        # cards instead of a plain table (the table stays as the model behind them, for search and tests)
+        self.cards = Gtk.FlowBox(selection_mode=Gtk.SelectionMode.NONE, homogeneous=True, min_children_per_line=1,
+                                 max_children_per_line=4, column_spacing=14, row_spacing=14, valign=Gtk.Align.START,
+                                 css_classes=["db-cards"])
+        self.cards.set_filter_func(lambda ch: self._card_match(ch))
+        self.stack.add_named(Gtk.ScrolledWindow(child=self.cards, hscrollbar_policy=Gtk.PolicyType.NEVER,
+                                                vexpand=True), "cards")
+        self._card_sig = None
+        self.search.connect("search-changed", lambda *_: self.cards.invalidate_filter())
+        store.connect("containers", lambda *_: self.get_mapped() and self.on_show())
 
     def header_buttons(self):
         b = Gtk.Button(label="Open SQLite file…", valign=Gtk.Align.CENTER)
@@ -575,6 +667,21 @@ class DatabasesPage(TablePage):
                     sort=lambda r: r.extra.get("kind"))
         self.column("Image", lambda r: r.data.get("Image", ""), css=["monospace", "dim-label"], width=220)
         self.column("Status", lambda r: r.data.get("Status", ""), width=170)
+        from . import quick
+        from .pages import row_menu
+
+        def act_setup():
+            box = Gtk.Box(halign=Gtk.Align.END)
+            box.row = None
+            box.append(row_menu(box, [
+                ("Open", lambda r: self.open(r.key)),
+                ("Rename the container…", lambda r: quick.rename_container(self.win, self.store, r.key)),
+                ("Change the container's ports…", lambda r: quick.PortsDialog(self.win, self.store, r.key).present(self.win))]))
+            return box
+
+        def act_upd(box, r):
+            box.row = r
+        self.widget_column("", act_setup, act_upd, width=48)
 
     def match(self, row, q):
         return q in cname(row.data).lower() or q in (row.data.get("Image") or "").lower() \
@@ -590,9 +697,94 @@ class DatabasesPage(TablePage):
                 rows.append(r)
         rows.sort(key=lambda r: (state_of(r.data) != "running", cname(r.data)))
         self.set_rows(rows)
+        if rows:
+            self._fill_cards(rows)
+            self.stack.set_visible_child_name("cards")
         n = len(rows)
         self.wtitle.set_subtitle(f"{n} database container{'s' if n != 1 else ''} · read-only unless you allow changes"
                                  if n else "Browse and query the databases in your containers")
+
+    def on_size(self, n):
+        from .util import per_size, set_columns
+        set_columns(self.cards, per_size(n, 1, 2, 3, 4, 5, 6))
+
+    BADGES = {"postgres": ("PG", "#336791"), "mysql": ("MY", "#00758f"), "redis": ("RD", "#d82c20"),
+              "mongo": ("MG", "#13aa52"), "vespa": ("VS", "#ff6a13"), "opensearch": ("OS", "#005eb8"),
+              "typesense": ("TS", "#d6336c"), "meilisearch": ("MS", "#ff5caa")}
+
+    def _card_match(self, child):
+        q = self.search.get_text().strip().lower()
+        r = getattr(child.get_child(), "row", None)
+        return not q or r is None or self.match(r, q)
+
+    def _fill_cards(self, rows):
+        sig = tuple((r.key, r.data.get("State"), r.data.get("Status"), str(r.data.get("Ports"))) for r in rows)
+        if sig == self._card_sig:                         # nothing changed: keep the cards (no widget churn)
+            return
+        self._card_sig = sig
+        while (ch := self.cards.get_first_child()):
+            self.cards.remove(ch)
+        for r in rows:
+            self.cards.append(self._card(r))
+
+    def _card(self, r):
+        from . import quick
+        from .pages import row_menu
+        c, kind = r.data, r.extra.get("kind")
+        running = c.get("State") == "running"
+        card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, css_classes=["card", "db-card"] +
+                       ([] if running else ["stopped"]))
+        card.row = r
+        top = Gtk.Box(spacing=12)
+        text, color = self.BADGES.get(kind, ("DB", "#666"))
+        badge = label(text, css=["db-badge"], ellipsize=False, xalign=0.5, valign=Gtk.Align.CENTER)
+        prov = Gtk.CssProvider()
+        prov.load_from_string(f"label {{ background: {color}; }}")
+        badge.get_style_context().add_provider(prov, Gtk.STYLE_PROVIDER_PRIORITY_APPLICATION)
+        top.append(badge)
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True, valign=Gtk.Align.CENTER)
+        col.append(label(cname(c), css=["heading"]))
+        col.append(label(db.LABELS.get(kind, kind or "") + " · " + (c.get("Image") or ""), css=["caption", "dim-label"]))
+        top.append(col)
+        card.append(top)
+        st = Gtk.Box(spacing=8)
+        dot = Gtk.Box(css_classes=["dot", state_of(c)], valign=Gtk.Align.CENTER)
+        st.append(dot)
+        st.append(label(c.get("Status") or c.get("State") or "", css=["caption"]))
+        card.append(st)
+        # the port row is always there (empty state included), so every card has the same rows and height
+        ports = [p for p in c.get("Ports") or [] if p.get("PublicPort")]
+        pr = Gtk.Box(spacing=8, css_classes=["db-card-port"])
+        if ports:
+            p = ports[0]
+            lan = (p.get("IP") or "0.0.0.0") in ("0.0.0.0", "::")
+            pr.append(label(f"localhost:{p['PublicPort']}", css=["monospace", "caption"]))
+            pr.append(label("whole network ⚠" if lan else "this computer only", css=["status-pill", "warn" if lan else "ok"],
+                            ellipsize=False, tooltip_text="Other devices on your Wi-Fi can reach this port" if lan
+                            else "Only this computer can reach this port"))
+        else:
+            pr.append(label("No published port", css=["caption", "dim-label"]))
+        card.append(pr)
+        card.append(Gtk.Box(vexpand=True))              # pushes the buttons to the bottom edge
+        acts = Gtk.Box(spacing=8)
+        if running:
+            ob = Gtk.Button(label="Open", hexpand=True, tooltip_text="Browse its tables, keys or documents")
+            ob.add_css_class("suggested-action")
+            ob.connect("clicked", lambda *_: self.open(r.key))
+        else:
+            ob = Gtk.Button(label="Start", hexpand=True, tooltip_text="Start the container, then open it")
+            ob.connect("clicked", lambda *_: (bg(self.store.engine.action, r.key, "start",
+                                                 done=lambda _x: self.store.refresh("containers"),
+                                                 error=lambda e: self.win.toast(str(e))),
+                                              self.win.toast(f"Starting {cname(c)}…")))
+        acts.append(ob)
+        holder = Gtk.Box()
+        holder.row = r
+        acts.append(row_menu(holder, [
+            ("Rename the container…", lambda rr: quick.rename_container(self.win, self.store, rr.key)),
+            ("Change the container's ports…", lambda rr: quick.PortsDialog(self.win, self.store, rr.key).present(self.win))]))
+        card.append(acts)
+        return card
 
     def on_activate(self, row):
         if row:

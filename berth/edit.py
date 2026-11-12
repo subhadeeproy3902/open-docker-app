@@ -253,7 +253,8 @@ def _recreate(engine, d, v):
     for host, ctr in v["ports"]:
         key = ctr if "/" in ctr else ctr + "/tcp"
         exposed[key] = {}
-        bindings.setdefault(key, []).append({"HostIp": "", "HostPort": host})
+        ip, _, port = host.rpartition(":")              # "127.0.0.1:5432" keeps the address it was bound to
+        bindings.setdefault(key, []).append({"HostIp": ip.strip("[]"), "HostPort": port})
     cfg["ExposedPorts"] = {**(cfg.get("ExposedPorts") or {}), **exposed}
     hc["PortBindings"] = bindings
     hc["Binds"] = [f"{src}:{dst}" for src, dst in v["mounts"]]
@@ -303,7 +304,8 @@ def _recreate(engine, d, v):
 def values_from(d):
     """The editable values of a container exactly as they are (used to recreate it unchanged, e.g. on a new image)."""
     cfg, hc = d.get("Config") or {}, d.get("HostConfig") or {}
-    ports = [(b.get("HostPort", ""), k.replace("/tcp", "")) for k, binds in (hc.get("PortBindings") or {}).items() for b in binds or [{}]]
+    ports = [((f"{b['HostIp']}:" if b.get("HostIp") not in (None, "", "0.0.0.0", "::") else "") + (b.get("HostPort") or ""),
+              k.replace("/tcp", "")) for k, binds in (hc.get("PortBindings") or {}).items() for b in binds or [{}]]
     mounts = [((m.get("Name") if m.get("Type") == "volume" else m.get("Source")), m.get("Destination", "") + ("" if m.get("RW", True) else ":ro"))
               for m in d.get("Mounts") or [] if m.get("Type") in ("volume", "bind")]
     return {"name": d.get("Name", "").lstrip("/"), "restart": (hc.get("RestartPolicy") or {}).get("Name") or "no",
@@ -316,3 +318,20 @@ def values_from(d):
 def recreate_same(engine, cid):
     """Recreate a container with identical settings so it picks up the image its tag now points to."""
     return _recreate(engine, engine.inspect(cid), values_from(engine.inspect(cid)))
+
+
+def change_ports(engine, cid, ports):
+    """Recreate a container with new port mappings [(host, container)], everything else unchanged.
+    host may be "8080" (all interfaces) or "127.0.0.1:8080" (this computer only)."""
+    d = engine.inspect(cid)
+    v = values_from(d)
+    v["ports"] = ports
+    return _recreate(engine, d, v)
+
+
+def repoint_volume(engine, cid, old, new):
+    """Recreate a container so its mounts of volume `old` use volume `new` instead."""
+    d = engine.inspect(cid)
+    v = values_from(d)
+    v["mounts"] = [(new if src == old else src, dst) for src, dst in v["mounts"]]
+    return _recreate(engine, d, v)

@@ -14,7 +14,7 @@ from .edit import EditDialog
 from .engine import demux
 from .files import FileBrowser
 from .logs import LogsExplorer
-from .util import (Row, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
+from .util import (release_on_leave, Row, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
                    fmt_rate, icon_button, label, labels, open_uri, short_status, spawn, state_of,
                    terminal_argv, themed, thread, detail_tag, push_detail, toolbar_row,
                    run_in_terminal, PageHeader, flat_page, table_card)
@@ -157,6 +157,29 @@ class Actions:
         open_uri(f"http://localhost:{port}")
 
 
+def _db_kind(c):
+    from .db import detect
+    return detect(c)
+
+
+_marks = {"key": None, "val": (set(), {})}
+
+
+def _connect_marks(page):
+    """(names shared publicly, {name: [local addresses]}) — computed once per container list, not per row."""
+    cs = page.store.containers
+    routes = page.settings["routes"] or []
+    key = (id(cs), len(cs), len(routes))
+    if _marks["key"] != key:
+        pub = {(c.get("Labels") or {}).get("io.berth.target") for c in cs
+               if (c.get("Labels") or {}).get("io.berth.role") == "tunnel" and c.get("State") == "running"}
+        addr = {}
+        for r in routes:
+            addr.setdefault(r["container"], []).append(f"{r['name']}.localhost")
+        _marks["key"], _marks["val"] = key, (pub, addr)
+    return _marks["val"]
+
+
 # ── list cells ──
 class NameCell(Gtk.TreeExpander):
     def __init__(self):
@@ -166,7 +189,14 @@ class NameCell(Gtk.TreeExpander):
         col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
         self.title = label(css=["heading-sm"])
         self.sub = label(css=["dim-label", "caption"])
-        col.append(self.title)
+        top = Gtk.Box(spacing=6)
+        top.append(self.title)
+        self.badge_pub = label("public", css=["status-pill", "warn", "name-badge"], ellipsize=False, visible=False,
+                               tooltip_text="Shared on the internet right now — see Ports & sharing")
+        self.badge_addr = label("address", css=["status-pill", "ok", "name-badge"], ellipsize=False, visible=False)
+        top.append(self.badge_pub)
+        top.append(self.badge_addr)
+        col.append(top)
         col.append(self.sub)
         box.append(self.dot)
         box.append(col)
@@ -187,6 +217,12 @@ class NameCell(Gtk.TreeExpander):
             self.dot.set_tooltip_text(st)
             self.title.set_text(service(c) if row.extra.get("in_group") else cname(c))
             self.sub.set_text(cname(c) if row.extra.get("in_group") else c.get("Id", "")[:12])
+            pub, addr = _connect_marks(page)
+            n = cname(c)
+            self.badge_pub.set_visible(n in pub)
+            self.badge_addr.set_visible(n in addr)
+            if n in addr:
+                self.badge_addr.set_tooltip_text("Has a local address: " + ", ".join(addr[n]))
 
 
 class TextCell(Gtk.Label):
@@ -305,7 +341,9 @@ class ActionsCell(Gtk.Box):
             self.main.set_tooltip_text("Stop" if run or c["State"] == "paused" else "Start")
             cid = c["Id"]
             m.append("View details", f"ctr.open::{cid}")
-            m.append("Edit…", f"ctr.edit::{cid}")
+            m.append("Rename…", f"ctr.rename::{cid}")
+            m.append("Change ports…", f"ctr.ports::{cid}")
+            m.append("Edit everything…", f"ctr.edit::{cid}")
             if c["State"] == "running":
                 m.append("Restart", f"ctr.verb::restart|{cid}")
                 m.append("Pause", f"ctr.verb::pause|{cid}")
@@ -427,6 +465,10 @@ class ContainersPage(Gtk.Box):
                          ("runcmd", lambda v: self.actions.copy_run(v)), ("commit", lambda v: self.actions.commit(v)),
                          ("export", lambda v: self.actions.export_fs(v)),
                          ("db", lambda v: (self.win.go("databases"), self.win.pages["databases"].open(v))),
+                         ("rename", lambda v: __import__("berth.quick", fromlist=["x"]).rename_container(
+                             self.win, self.store, v)),
+                         ("ports", lambda v: __import__("berth.quick", fromlist=["x"]).PortsDialog(
+                             self.win, self.store, v).present(self.win)),
                          ("expose", lambda v: self._sharing_dialog("ExposeDialog", v)),
                          ("share", lambda v: self._sharing_dialog("ShareDialog", v))):
             a = Gio.SimpleAction.new(name, GLib.VariantType.new("s"))
@@ -459,7 +501,7 @@ class ContainersPage(Gtk.Box):
         col("Name", NameCell, name_bind, expand=True)
         self.col_image = col("Image", lambda: TextCell(["monospace", "dim-label"]),
             lambda w, r, _t: (w.set_text(r.data.get("Image", "") if r.kind == "container" else ""),
-                              w.set_tooltip_text(r.data.get("Image") if r.kind == "container" else None)), width=160)
+                              w.set_tooltip_text(r.data.get("Image") if r.kind == "container" else None)), expand=True)
         col("Status", lambda: TextCell(["dim-label"]),
             lambda w, r, _t: w.set_text(short_status(r.data.get("Status", "")) if r.kind == "container" else ""), width=132)
         self.col_ports = col("Ports", lambda: PortsCell(self.actions), lambda w, r, _t: w.update(r), width=118)
@@ -725,6 +767,10 @@ class ContainerDetail(Adw.NavigationPage):
                                    tooltip_text="Change name, environment, ports, volumes, limits…")
         self.btn_edit.connect("clicked", lambda *_: EditDialog(page.win, self.store, self.cid).present(page.win))
         more = Gio.Menu()
+        quick = Gio.Menu()
+        quick.append("Rename…", "det.rename")
+        quick.append("Change ports…", "det.ports")
+        more.append_section(None, quick)
         more.append("Copy docker run command", "det.runcmd")
         more.append("Save as image…", "det.commit")
         more.append("Export filesystem…", "det.export")
@@ -732,7 +778,10 @@ class ContainerDetail(Adw.NavigationPage):
                                        tooltip_text="More")
         self.btn_more.add_css_class("flat")
         dag = Gio.SimpleActionGroup()
-        for n, fn in (("runcmd", self.actions.copy_run), ("commit", self.actions.commit), ("export", self.actions.export_fs)):
+        from . import quick as _q
+        for n, fn in (("runcmd", self.actions.copy_run), ("commit", self.actions.commit), ("export", self.actions.export_fs),
+                      ("rename", lambda c: _q.rename_container(page.win, self.store, c)),
+                      ("ports", lambda c: _q.PortsDialog(page.win, self.store, c).present(page.win))):
             a = Gio.SimpleAction.new(n, None)
             a.connect("activate", lambda *_a, f=fn: f(self.cid))
             dag.add_action(a)
@@ -759,7 +808,8 @@ class ContainerDetail(Adw.NavigationPage):
                                   ("mounts", "Mounts", "folder-symbolic"),
                                   ("exec", "Exec", "utilities-terminal-symbolic"),
                                   ("files", "Files", "folder-open-symbolic"),
-                                  ("stats", "Stats", "utilities-system-monitor-symbolic")):
+                                  ("stats", "Stats", "utilities-system-monitor-symbolic"),
+                                  *((("database", "Database", "drive-multidisk-symbolic"),) if _db_kind(c) else ())):
             if icon == "utilities-system-monitor-symbolic":
                 icon = themed(icon, "power-profile-performance-symbolic")
             self.tabs.add_titled_with_icon(Gtk.Box(orientation=Gtk.Orientation.VERTICAL), name, title, icon)
@@ -767,15 +817,33 @@ class ContainerDetail(Adw.NavigationPage):
         self.connect("shown", lambda *_: self._tab())
         self._h1 = self.store.connect("containers", lambda *_: self._refresh())
         self._h2 = self.store.connect("stats", lambda *_: self._stats())
-        self.connect("destroy", lambda *_: self._disconnect())
+        release_on_leave(self, self._disconnect)
         self._refresh()
 
     def _disconnect(self):
+        """Leaving for good: unsubscribe and drop the heavy parts (log lines, charts, terminal) so the page can be
+        freed. Without this every container ever opened stayed in memory — 2.7 GB after a long day."""
         for h in (self._h1, self._h2):
             try:
                 self.store.disconnect(h)
             except TypeError:
                 pass
+        self._h1 = self._h2 = None
+        logs = getattr(self, "logs", None)
+        if logs is not None:
+            logs._stop()
+            logs.entries = []
+            logs.buf.set_text("")
+        for name in list(getattr(self, "built", ())):
+            ch = self.tabs.get_child_by_name(name)
+            if ch is not None:
+                self.tabs.remove(ch)
+        self.built = set()
+        self.logs = None
+        if getattr(self, "explorer", None) is not None:
+            self.explorer.close()
+            self.explorer = None
+        self.set_child(None)                  # release the whole widget tree, cycles and all
 
     def _gone(self):
         self.page.nav.pop_to_tag("list")
@@ -824,13 +892,39 @@ class ContainerDetail(Adw.NavigationPage):
         if name not in self.built and name != "logs":
             self.built.add(name)
             builder = {"inspect": self._build_inspect, "mounts": self._build_mounts, "exec": self._build_exec,
-                       "files": self._build_files, "stats": self._build_stats}[name]
+                       "files": self._build_files, "stats": self._build_stats, "database": self._build_database}[name]
             child = self.tabs.get_child_by_name(name)
             new = builder()
             new.set_vexpand(True)
             new.set_hexpand(True)
             child.append(new)
         self.page.win.update_saver()
+
+    def _build_database(self):
+        """The same explorer as the Databases page, inside this container's details."""
+        from . import db
+        from .db_page import Explorer
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, vexpand=True)
+        spin = Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, vexpand=True, width_request=32,
+                           height_request=32)
+        box.append(spin)
+
+        def work():
+            ins = self.store.engine.inspect(self.cid)
+            return db.open_backend(self.store.engine, ins), (ins.get("Name") or "").lstrip("/")
+
+        def done(r):
+            backend, title = r
+            box.remove(spin)
+            self.explorer = Explorer(self.page.win.pages["databases"], backend, title, embedded=True)
+            box.append(self.explorer)
+
+        def fail(e):
+            box.remove(spin)
+            box.append(Adw.StatusPage(icon_name="dialog-warning-symbolic", title="Can't open this database",
+                                      description=esc(str(e)), vexpand=True))
+        bg(work, done=done, error=fail)
+        return box
 
     def stats_visible(self):
         return self.get_mapped() and self.tabs.get_visible_child_name() == "stats"

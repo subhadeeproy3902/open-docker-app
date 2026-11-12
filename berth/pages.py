@@ -10,7 +10,7 @@ from . import charts
 from .cli import CommandDialog, run_capture
 from .files import FileBrowser, clone_volume, export_volume, import_volume, start_volume_helper, stop_volume_helper
 from .scan import ScanDialog
-from .util import (Row, ago, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
+from .util import (release_on_leave, Row, ago, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
                    fmt_rate, icon_button, label, labels, ordering, thread, detail_tag, push_detail,
                    toolbar_row, PageHeader, flat_page, table_card)
 
@@ -59,6 +59,22 @@ def ask_text(win, heading, body, initial, ok, then):
     d.set_default_response("ok")
     d.connect("response", lambda _d, r: r == "ok" and e.get_text().strip() and then(e.get_text().strip()))
     d.present(win)
+
+
+def row_menu(holder, items):
+    """A ⋮ menu for a table row. items: [(label, fn(row))]; holder.row is the row the cell shows right now."""
+    menu = Gio.Menu()
+    ag = Gio.SimpleActionGroup()
+    for i, (lbl, fn) in enumerate(items):
+        menu.append(lbl, f"row.a{i}")
+        a = Gio.SimpleAction.new(f"a{i}", None)
+        a.connect("activate", lambda *_a, f=fn: holder.row and f(holder.row))
+        ag.add_action(a)
+    mb = Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=menu, tooltip_text="More actions",
+                        valign=Gtk.Align.CENTER)
+    mb.add_css_class("flat")
+    mb.insert_action_group("row", ag)
+    return mb
 
 
 class TablePage(Gtk.Box):
@@ -169,7 +185,25 @@ class TablePage(Gtk.Box):
         return c
 
     def set_rows(self, rows, sort_col=None):
-        self.model.splice(0, self.model.get_n_items(), rows)
+        """Show these rows. Existing Row objects are updated in place (same key → same object), so a refresh every
+        30 s doesn't create a fresh set of rows and cells each time — they used to pile up all day (memory leak)."""
+        old = {self.model.get_item(i).key: self.model.get_item(i) for i in range(self.model.get_n_items())}
+        merged = []
+        for r in rows:
+            o = old.get(r.key)
+            if o is not None and o.kind == r.kind:
+                o.data = r.data
+                o.extra.update(r.extra)
+                merged.append(o)
+            else:
+                merged.append(r)
+        if [r.key for r in merged] == list(old) and all(a is b for a, b in zip(merged, old.values())):
+            for o in merged:
+                o.emit("changed")
+            if self.view.get_sorter():
+                self.view.get_sorter().changed(Gtk.SorterChange.DIFFERENT)
+        else:
+            self.model.splice(0, self.model.get_n_items(), merged)
         self.loaded = True
         self.stack.set_visible_child_name("list" if rows else "empty")
         if sort_col is not None and not self.view.get_sorter().get_primary_sort_column():
@@ -247,12 +281,17 @@ class ImagesPage(TablePage):
             box.run = icon_button("media-playback-start-symbolic", "Run")
             box.pull = icon_button("folder-download-symbolic", "Pull again (update)")
             box.trash = icon_button("user-trash-symbolic", "Delete")
-            for w in (box.run, box.pull, box.trash):
+            from . import quick
+            box.row = None
+            box.more = row_menu(box, [
+                ("Rename…", lambda r: quick.rename_image(self.win, self.store, r.data["ref"], r.data["id"])),
+                ("Run…", lambda r: RunDialog(self.win, self.store, r.data).present(self.win)),
+                ("Open details", lambda r: self.on_activate(r))])
+            for w in (box.run, box.pull, box.more, box.trash):
                 box.append(w)
             box.run.connect("clicked", lambda *_: box.row and RunDialog(self.win, self.store, box.row.data).present(self.win))
             box.pull.connect("clicked", lambda *_: box.row and PullDialog(self.win, self.store, box.row.data["ref"]).present(self.win))
             box.trash.connect("clicked", lambda *_: box.row and self._delete(box.row))
-            box.row = None
             return box
 
         def act_upd(box, r):
@@ -260,7 +299,7 @@ class ImagesPage(TablePage):
             box.trash.set_sensitive(not r.data["used"])
             box.trash.set_tooltip_text("In use by " + ", ".join(r.data["used"]) if r.data["used"] else "Delete")
             box.pull.set_sensitive(r.data["repo"] != "<none>")
-        self.widget_column("", act_setup, act_upd, width=118)
+        self.widget_column("", act_setup, act_upd, width=150)
 
     def on_show(self):
         if self.store.images is None:
@@ -329,6 +368,10 @@ class ImageDetail(Adw.NavigationPage):
         hb = Adw.HeaderBar()
         tagb = Gtk.Button(label="Tag…", tooltip_text="Give this image another name:tag")
         tagb.connect("clicked", lambda *_: self._tag())
+        renb = Gtk.Button(label="Rename…", tooltip_text="Change this image's name:tag (the old name is removed)")
+        renb.connect("clicked", lambda *_: __import__("berth.quick", fromlist=["x"]).rename_image(
+            page.win, page.store, d["ref"], d["id"]))
+        self._renb = renb
         scan = Gtk.Button(label="Scan", tooltip_text="Check for known vulnerabilities (Trivy)")
         scan.connect("clicked", lambda *_: ScanDialog(page.win, page.store, d["ref"]).present(page.win))
         more = Gio.Menu()
@@ -343,6 +386,8 @@ class ImageDetail(Adw.NavigationPage):
         self.insert_action_group("imgd", ag)
         hb.pack_end(mb)
         hb.pack_end(tagb)
+        if d["repo"] != "<none>":
+            hb.pack_end(self._renb)
         hb.pack_end(scan)
         run = Gtk.Button(label="Run")
         run.add_css_class("suggested-action")
@@ -647,16 +692,24 @@ class VolumesPage(TablePage):
                     sort=lambda r: r.data["created"])
 
         def act_setup():
-            b = icon_button("user-trash-symbolic", "Delete")
-            b.row = None
-            b.connect("clicked", lambda *_: b.row and self._delete(b.row))
-            return b
+            from . import quick
+            box = Gtk.Box(spacing=2, halign=Gtk.Align.END)
+            box.row = None
+            box.more = row_menu(box, [
+                ("Rename…", lambda r: quick.rename_volume(self.win, self.store, r.key)),
+                ("Clone…", lambda r: quick.clone_volume_ask(self.win, self.store, r.key)),
+                ("Open (browse files)", lambda r: self.on_activate(r))])
+            box.trash = icon_button("user-trash-symbolic", "Delete")
+            box.trash.connect("clicked", lambda *_: box.row and self._delete(box.row))
+            box.append(box.more)
+            box.append(box.trash)
+            return box
 
-        def act_upd(b, r):
-            b.row = r
-            b.set_sensitive(not r.data["used"])
-            b.set_tooltip_text("In use — delete its container first" if r.data["used"] else "Delete")
-        self.widget_column("", act_setup, act_upd, width=56)
+        def act_upd(box, r):
+            box.row = r
+            box.trash.set_sensitive(not r.data["used"])
+            box.trash.set_tooltip_text("In use — delete its container first" if r.data["used"] else "Delete")
+        self.widget_column("", act_setup, act_upd, width=88)
 
     def on_show(self):
         if self.store.volumes is None:
@@ -740,7 +793,9 @@ class VolumeDetail(Adw.NavigationPage):
         hb = Adw.HeaderBar()
         self.wt = Adw.WindowTitle(title=d["name"], subtitle=("Used by " + ", ".join(d["used"])) if d["used"] else "Not used by any container")
         hb.set_title_widget(self.wt)
-        for lbl, tip, fn in (("Clone…", "Copy everything into a new volume", self._clone),
+        for lbl, tip, fn in (("Rename…", "Give the volume a new name (containers using it are switched over)",
+                              self._rename),
+                             ("Clone…", "Copy everything into a new volume", self._clone),
                              ("Import…", "Unpack a .tar / .tar.gz into this volume", self._import),
                              ("Export…", "Save the volume's files as a .tar.gz", self._export)):
             b = Gtk.Button(label=lbl, tooltip_text=tip)
@@ -796,6 +851,15 @@ class VolumeDetail(Adw.NavigationPage):
             confirm(win, "Import into this volume?", f"Files from <tt>{esc(os.path.basename(path))}</tt> are unpacked into "
                     f"<tt>{esc(n)}</tt>; files with the same names are replaced.", "Import", really)
         open_dialog(win, "Import into volume", go, ["*.tar", "*.tar.gz", "*.tgz"])
+
+    def _rename(self):
+        from .files import stop_volume_helper
+        from .quick import rename_volume
+        if self.helper:                                   # release the volume from our own file browser first
+            stop_volume_helper(self.page.store.engine, self.helper)
+            self.helper = None
+        self.page.nav.pop_to_tag("list")
+        rename_volume(self.page.win, self.page.store, self.d["name"])
 
     def _clone(self):
         win, eng, n = self.page.win, self.page.store.engine, self.d["name"]
@@ -915,7 +979,7 @@ class NetworkDetail(Adw.NavigationPage):
         self.set_child(tv)
         self.groups = []
         self._h = page.store.connect("containers", lambda *_: self.reload())
-        self.connect("destroy", lambda *_: page.store.disconnect(self._h))
+        release_on_leave(self, lambda: page.store.disconnect(self._h))
         self.reload()
 
     def reload(self):
@@ -1147,6 +1211,11 @@ class ResourcesPage(Gtk.Box):
     title, icon = "Resource usage", "utilities-system-monitor-symbolic"
     wants_stats = True
 
+    def on_size(self, n):
+        from .util import set_columns
+        set_columns(self.tiles_box, 2 if n in ("sm", "md") else 4)
+        set_columns(self.charts_box, 1 if n == "sm" else 2)
+
     def __init__(self, win, store, settings):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.win, self.store, self.settings = win, store, settings
@@ -1180,6 +1249,7 @@ class ResourcesPage(Gtk.Box):
         body.append(tiles)
         row = Gtk.FlowBox(homogeneous=True, min_children_per_line=1, max_children_per_line=2, column_spacing=12,
                           row_spacing=12, selection_mode=Gtk.SelectionMode.NONE)
+        self.charts_box = row
         self.ch_cpu = charts.LineChart(lambda v: fmt_pct(v), 200)
         self.ch_mem = charts.LineChart(fmt_bytes, 200, binary=True)
         self.legends = {}

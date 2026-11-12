@@ -435,6 +435,32 @@ def t_proxy():
     eng.remove_container(blocker, force=True)
     ok, msg = raises(sharing.start_proxy, eng, (ports[0], ports[1]))
     check("proxy: start again is idempotent", not ok and msg == "no error", msg)
+    # phones: one address also on the Wi-Fi, by its own port; the others stay on 127.0.0.1
+    from berth.fileshare import lan_ip
+    lan_route = {"name": "berth-test-phone", "container": "berth-test-web", "port": 80, "https": False, "lan": True,
+                 "lan_port": 18100}
+    pid = sharing.start_proxy(eng, ports, lan=sharing.lan_ports(routes + [lan_route]))
+    sharing.apply_routes(eng, routes + [lan_route], pid)
+    b = {k: [x.get("HostIp") for x in v] for k, v in eng.inspect(pid)["NetworkSettings"]["Ports"].items() if v}
+    check("phones: only the phone port is on the network", b.get("18100/tcp") == ["0.0.0.0"] and
+          b.get("80/tcp") == ["127.0.0.1"], b)
+    ip = lan_ip()
+    ok = False
+    for _ in range(10):
+        try:
+            c = http.client.HTTPConnection(ip, 18100, timeout=5)
+            c.request("GET", "/")
+            r = c.getresponse()
+            ok = r.status == 200 and "nginx" in r.read().decode(errors="replace")
+            if ok:
+                break
+        except OSError:
+            pass
+        time.sleep(1)
+    check(f"phones: http://{ip}:18100 serves the container (Wi-Fi address)", ok)
+    pid = sharing.start_proxy(eng, ports, lan=sharing.lan_ports(routes))
+    b = {k for k, v in eng.inspect(pid)["NetworkSettings"]["Ports"].items() if v}
+    check("phones: switching it off closes the network port", "18100/tcp" not in b, b)
     sharing.stop_proxy(eng, remove=True)
     check("proxy: removed", not sharing.proxy(eng.containers_filtered({"name": ["berth-proxy"]})))
     check("names: validation", sharing.validate_name("Shop", []) and sharing.validate_name("a_b", [])
@@ -474,9 +500,157 @@ def t_tunnel():
         {"label": [f"{sharing.ROLE}=tunnel"]})})
 
 
+# ── renames, ports, richest database, link expiry ──────────────────────────────────────────────────────────────
+def t_manage():
+    from berth.edit import change_ports
+    from berth.files import _helper, stop_volume_helper
+    # container rename (live) + port change keeps the 127.0.0.1 binding
+    cid = run("ports", "nginx:alpine", network="bridge", ports={80: 18091})
+    eng.rename(cid, "berth-test-renamed")
+    ins = eng.inspect(cid)
+    check("container rename: live, still running", ins["Name"] == "/berth-test-renamed" and ins["State"]["Running"])
+    new = change_ports(eng, cid, [("127.0.0.1:18092", "80")])
+    b = eng.inspect(new)["HostConfig"]["PortBindings"]["80/tcp"][0]
+    check("change ports: new host port, bound to 127.0.0.1 only", b == {"HostIp": "127.0.0.1", "HostPort": "18092"}, b)
+    st, _b = fetch(18092, "localhost")
+    check("change ports: reachable on the new port", st == 200, st)
+    new2 = change_ports(eng, new, [("127.0.0.1:18093", "80")])     # edit again: the 127.0.0.1 binding survives
+    b2 = eng.inspect(new2)["HostConfig"]["PortBindings"]["80/tcp"][0]
+    check("change ports: a second edit keeps 127.0.0.1 (was lost before)", b2["HostIp"] == "127.0.0.1", b2)
+    # image rename = tag + untag old
+    eng.tag("nginx:alpine", "berth-test-img", "one")
+    iid = eng.req("GET", "/images/berth-test-img:one/json")["Id"]
+    eng.tag(iid, "berth-test-img", "two")
+    eng.remove_image("berth-test-img:one")
+    tags = eng.req("GET", f"/images/{iid}/json")["RepoTags"]
+    check("image rename: new tag present, old gone, image kept", "berth-test-img:two" in tags and
+          "berth-test-img:one" not in tags, tags)
+    eng.remove_image("berth-test-img:two")
+    # volume rename while a running container uses it
+    vol = "berth-test-vol-a"
+    for v in ("berth-test-vol-a", "berth-test-vol-b"):
+        try:
+            eng.remove_volume(v)
+        except Exception:
+            pass
+    eng.req("POST", "/volumes/create", body={"Name": vol, "Labels": LABEL})
+    user = run("voluser", "busybox:latest", cmd=["sh", "-c", "echo keep-me > /data/f; sleep 600"], binds=[f"{vol}:/data"])
+    time.sleep(1)
+    from berth import quick
+    from berth.edit import repoint_volume
+    from berth.files import clone_volume
+    eng.action(user, "stop")                       # the same steps quick.rename_volume runs
+    clone_volume(eng, vol, "berth-test-vol-b")
+    nid = repoint_volume(eng, user, vol, "berth-test-vol-b")
+    eng.action(nid, "start")
+    eng.remove_volume(vol)
+    mounts = [m.get("Name") for m in eng.inspect(nid)["Mounts"]]
+    code, out, _e = eng.exec_run(nid, ["cat", "/data/f"])
+    check("volume rename: container switched, data kept, running", mounts == ["berth-test-vol-b"] and out.strip() ==
+          "keep-me" and eng.inspect(nid)["State"]["Running"], (mounts, out.strip()))
+    check("volume rename: old volume gone", vol not in [v["Name"] for v in eng.volumes()])
+    check("volume rename: helper containers are not counted as users", quick._users.__code__.co_names.count("HELPER_LABEL"))
+    eng.remove_container(nid, force=True)
+    eng.remove_volume("berth-test-vol-b")
+
+
+def t_dbrename():
+    # Postgres: empty default database, data in another one → richest; renames need allow_write
+    cid = run("pg2", "postgres:16-alpine", {"POSTGRES_PASSWORD": "pw", "POSTGRES_DB": "empty"})
+    b = backend(cid)
+    wait(cid, lambda: b.connect(), what="postgres")
+    b.query("create database shopdata", allow_write=True)
+    b.db = "shopdata"
+    b.query("create table items(id int); insert into items values (1)", allow_write=True)
+    b.db = "empty"
+    check("richest: picks the database that has tables", b.richest(b.databases()) == "shopdata", b.databases())
+    b.db = "shopdata"
+    node = next(n for s in b.tree() for n in b.children(s) if n.label == "items")
+    ok, msg = raises(b.rename, node, "goods", contains="allow changes")
+    check("rename refused without Allow changes", ok, msg)
+    b.rename(node, "goods", True)
+    check("postgres: rename table", any(n.label == "goods" for s in b.tree() for n in b.children(s)))
+    b.rename(db.Node("shopdata", "database", "shopdata"), "shop2", True)
+    check("postgres: rename database (connected elsewhere)", "shop2" in b.databases() and b.db == "shop2", b.databases())
+    # MySQL table, Redis key, Mongo collection
+    m = backend(run("my2", "mariadb:11", {"MARIADB_ROOT_PASSWORD": "pw", "MARIADB_DATABASE": "shop"}))
+    wait(m.cid, lambda: m.connect(), what="mariadb")
+    m.query("create table t1(x int)", allow_write=True)
+    m.rename(db.Node("t1", "table", "t1"), "t2", True)
+    check("mysql: rename table", [n.label for n in m.tree()] == ["t2"], [n.label for n in m.tree()])
+    r = backend(run("redis2", "redis:7-alpine"))
+    wait(r.cid, lambda: r.connect(), what="redis")
+    r.query("SET a 1\nSET b 2", allow_write=True)
+    r.rename(db.Node("a", "key", "a"), "c", True)
+    ok, msg = raises(r.rename, db.Node("c", "key", "c"), "b", True, contains="already exists")
+    check("redis: rename key, never overwrites another key", {n.label for n in r.tree()} == {"b", "c"} and ok, msg)
+    g = backend(run("mongo2", "mongo:7"))
+    wait(g.cid, lambda: g.connect(), what="mongo")
+    g.db = "shop"
+    g.query('db.old.insertOne({a: 1})', allow_write=True)
+    g.rename(db.Node("old", "collection", "old"), "new", True)
+    check("mongo: rename collection", [n.label for n in g.tree()] == ["new"])
+    check("mongo: richest by size", g.richest(g.databases()) == "shop", g.databases())
+
+
+def t_expiry():
+    web = run("exp", "nginx:alpine")
+    ins = eng.inspect(web)
+    sharing.ensure_image(eng, sharing.TUNNEL_IMAGE)
+    mk = lambda name, exp: eng.create_container(name, {"Image": sharing.TUNNEL_IMAGE, "Cmd": ["--version"],
+        "Labels": {**LABEL, sharing.ROLE: "tunnel", sharing.TARGET: "berth-test-exp", sharing.PORT: "80",
+                   **({sharing.EXPIRES: str(exp)} if exp else {})},
+        "HostConfig": {"NetworkMode": f"container:{ins['Id']}"}})["Id"]
+    past, future, never = mk("berth-test-t1", int(time.time()) - 5), mk("berth-test-t2", int(time.time()) + 3600), \
+        mk("berth-test-t3", None)
+    gone = sharing.remove_expired(eng)
+    left = {c["Id"] for c in eng.containers_filtered({"label": [f"{sharing.ROLE}=tunnel"]})}
+    check("expiry: expired link removed, others kept", past not in left and future in left and never in left, gone)
+    check("expiry: label parsed", sharing.expires_at(eng.inspect(future)) is not None)
+
+def t_huge():
+    """Huge cells, binary, huge keys and oversized pages must never break the explorer (a 59 MB blob table did)."""
+    cid = run("pgbig", "postgres:16-alpine", {"POSTGRES_PASSWORD": "pw"})
+    b = backend(cid)
+    wait(cid, lambda: b.connect(), what="postgres")
+    b.query("create table big(id int, b bytea, t text, j jsonb); insert into big select g, decode(repeat('ab', 2500000), "
+            "'hex'), repeat('x', 1000000), jsonb_build_object('k', repeat('y', 300000)) from generate_series(1, 5) g",
+            allow_write=True)
+    node = next(n for sch in b.tree() for n in b.children(sch) if n.label == "big")
+    r = db._shrinking(b.browse, node, 0, db.ROW_LIMIT)
+    check("huge: postgres page with 2.5 MB binary + 1 M-char text cells", len(r.rows) == 5 and
+          r.rows[0][1].startswith("‹binary") and "1,000,000 characters" in r.rows[0][2] and
+          len(r.rows[0][3]) < db.CELL_MAX + 40, [str(v)[:40] for v in r.rows[0]])
+    q = b.query("select * from big")
+    check("huge: raw query over 16 MB of output doesn't crash", q.rows and q.truncated and
+          all(len(str(v or "")) <= db.CELL_MAX + 40 for row in q.rows for v in row), (len(q.rows), q.note))
+    rd = backend(run("redisbig", "redis:7-alpine"))
+    wait(rd.cid, lambda: rd.connect(), what="redis")
+    rd.exec(["sh", "-c", "head -c 1000000 /dev/zero | tr '\\\\0' x | redis-cli -x SET big >/dev/null; "
+                         "for i in $(seq 1 5000); do echo HSET wide f$i v$i; done | redis-cli >/dev/null"])
+    keys = {n.label: n for n in rd.tree()}
+    a = rd.browse(keys["big"])
+    w = rd.browse(keys["wide"])
+    check("huge: 1 MB redis string shows its start", "1,000,000 bytes" in a.note and len(a.rows[0][0]) < db.CELL_MAX + 40,
+          a.note)
+    check("huge: 5,000-field hash shows a sample, not everything", w.truncated and 0 < len(w.rows) <= db.ROW_LIMIT, w.note)
+    m = backend(run("mongobig", "mongo:7"))
+    wait(m.cid, lambda: m.connect(), what="mongo")
+    m.db = "shop"
+    m.query("db.docs.insertMany(Array.from({length: 10}, (_, i) => ({i: i, blob: 'z'.repeat(3000000)})))",
+            allow_write=True)
+    node = next(n for n in m.tree() if n.label == "docs")
+    r = db._shrinking(m.browse, node, 0, db.ROW_LIMIT)
+    check("huge: 30 MB of mongo documents → smaller pages instead of an error", r.rows and getattr(r, "page", 200) < 200,
+          (len(r.rows), r.note))
+    check("huge: cell helper summarises binary and long text",
+          db.cap(b"\x00" * 10) == "‹binary · 10 B›" and db.cap("a" * 5000).endswith("[5,000 characters]"))
+
+
 TESTS = [("detect", t_detect), ("postgres", t_postgres), ("mysql", t_mysql), ("redis", t_redis), ("mongo", t_mongo),
          ("opensearch", t_opensearch), ("typesense", t_typesense), ("meilisearch", t_meili), ("sqlite", t_sqlite),
-         ("proxy", t_proxy), ("tunnel", t_tunnel)]
+         ("proxy", t_proxy), ("tunnel", t_tunnel), ("manage", t_manage), ("dbrename", t_dbrename),
+         ("expiry", t_expiry), ("huge", t_huge)]
 
 if __name__ == "__main__":
     try:

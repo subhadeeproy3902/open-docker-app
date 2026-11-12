@@ -24,6 +24,7 @@ import time
 PROXY_NAME, PROXY_IMAGE, PROXY_DATA = "berth-proxy", "caddy:2-alpine", "berth-proxy-data"
 TUNNEL_IMAGE = "cloudflare/cloudflared:latest"
 ROLE, TARGET, PORT, KEEP, MODE = "io.berth.role", "io.berth.target", "io.berth.port", "io.berth.keep", "io.berth.mode"
+EXPIRES = "io.berth.expires"          # unix time after which the link must be gone
 NAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
 URL_RE = re.compile(r"https://[a-z0-9-]+\.trycloudflare\.com")
 ROOT_CA = "/data/caddy/pki/authorities/local/root.crt"
@@ -116,25 +117,54 @@ def url_for(route, ports):
     return f"http://{route['name']}.localhost" + ("" if http_port == 80 else f":{http_port}")
 
 
-def start_proxy(engine, ports, progress=None):
-    """Create (or start) the proxy. ports = (http, https) on 127.0.0.1. Returns its id."""
+LAN_FIRST = 8100
+
+
+def lan_ports(routes):
+    return sorted(int(r["lan_port"]) for r in routes if r.get("lan") and r.get("lan_port"))
+
+
+def assign_lan_port(routes, route):
+    """Give a route that should be reachable from phones its own port (8100, 8101, …)."""
+    if route.get("lan") and not route.get("lan_port"):
+        used = set(lan_ports(routes))
+        p = LAN_FIRST
+        while p in used:
+            p += 1
+        route["lan_port"] = p
+    return route
+
+
+def lan_url(route):
+    from .fileshare import lan_ip
+    return f"http://{lan_ip()}:{route['lan_port']}"
+
+
+def start_proxy(engine, ports, progress=None, lan=()):
+    """Create (or start) the proxy. ports = (http, https) on 127.0.0.1; lan = ports published to the whole network
+    for addresses that phones should reach. Returns its id."""
     http_port, https_port = ports
+    want = {80: http_port, 443: https_port, **{p: p for p in lan}}
     ensure_image(engine, PROXY_IMAGE, progress)
     existing = engine.containers_filtered({"name": [f"^/{PROXY_NAME}$"]})
     if existing:
         c = existing[0]
         bound = {p.get("PrivatePort"): p.get("PublicPort") for p in c.get("Ports") or [] if p.get("PublicPort")}
-        if c["State"] != "running" and bound in ({}, {80: http_port, 443: https_port}):
+        if c["State"] != "running" and not bound and engine.inspect(c["Id"])["HostConfig"].get("PortBindings") and \
+                {int(k.split("/")[0]): int(v[0]["HostPort"]) for k, v in
+                 engine.inspect(c["Id"])["HostConfig"]["PortBindings"].items()} == want:
             engine.action(c["Id"], "start")
             return c["Id"]
-        if bound == {80: http_port, 443: https_port}:
+        if bound == want:
             return c["Id"]
         engine.remove_container(c["Id"], force=True)           # ports changed: recreate (routes are re-applied)
     cfg = {"Image": PROXY_IMAGE, "Labels": {ROLE: "proxy"},
            "Cmd": ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"],
-           "ExposedPorts": {"80/tcp": {}, "443/tcp": {}},
+           "ExposedPorts": {f"{p}/tcp": {} for p in want},
            "HostConfig": {"PortBindings": {"80/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(http_port)}],
-                                           "443/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(https_port)}]},
+                                           "443/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(https_port)}],
+                                           # only the addresses switched to "phones too" listen on the network
+                                           **{f"{p}/tcp": [{"HostIp": "0.0.0.0", "HostPort": str(p)}] for p in lan}},
                           "Binds": [f"{PROXY_DATA}:/data"], "RestartPolicy": {"Name": "unless-stopped"},
                           "ExtraHosts": ["host.docker.internal:host-gateway"]}}
     r = engine.create_container(PROXY_NAME, cfg)
@@ -196,6 +226,12 @@ def caddyfile(routes, upstreams):
             out.append(f'\trespond "{r["container"]} is not running — start it in Berth" 502')
         out.append("}")
         out.append("")
+        if r.get("lan") and r.get("lan_port"):        # the same app for phones on this Wi-Fi, by port
+            out.append(f"http://:{r['lan_port']} {{")
+            out.append(f"\treverse_proxy {up}" if up else
+                       f'\trespond "{r["container"]} is not running — start it in Berth" 502')
+            out.append("}")
+            out.append("")
     out.append(":80 {")
     out.append('\trespond "No Berth address with this name. Add one in Berth → Ports & sharing." 404')
     out.append("}")
@@ -274,8 +310,10 @@ def tunnel_name(target_name, port):
     return f"berth-share-{safe}-{port}"
 
 
-def start_tunnel(engine, target_id, port, token=None, keep=False, progress=None):
-    """Start a tunnel to target:port. Returns (container id, public url or None for token tunnels)."""
+def start_tunnel(engine, target_id, port, token=None, keep=False, progress=None, expires=None):
+    """Start a tunnel to target:port. Returns (container id, public url or None for token tunnels).
+    expires: unix time when the link is removed (Berth checks while running; with keep=True on Linux a systemd user
+    timer removes it even when Berth is closed)."""
     ins = engine.inspect(target_id)
     if not (ins.get("State") or {}).get("Running"):
         raise ShareError("Start the container first")
@@ -293,10 +331,12 @@ def start_tunnel(engine, target_id, port, token=None, keep=False, progress=None)
         cmd += ["--url", f"http://localhost:{int(port)}"]
     cfg = {"Image": TUNNEL_IMAGE, "Cmd": cmd, "Env": env,
            "Labels": {ROLE: "tunnel", TARGET: tname, PORT: str(port), KEEP: "1" if keep else "0",
-                      MODE: "token" if token else "quick"},
+                      MODE: "token" if token else "quick", **({EXPIRES: str(int(expires))} if expires else {})},
            "HostConfig": {"NetworkMode": f"container:{ins['Id']}", "RestartPolicy": {"Name": "no"}}}
     r = engine.create_container(name, cfg)
     engine.action(r["Id"], "start")
+    if expires and keep:
+        schedule_removal(engine, name, expires)
     if token:
         return r["Id"], None
     if progress:
@@ -338,3 +378,47 @@ def stop_unpinned(engine, timeout=5):
             except Exception:
                 pass
     return n
+
+
+def expires_at(c):
+    try:
+        return int(_labels(c).get(EXPIRES) or 0) or None
+    except ValueError:
+        return None
+
+
+def remove_expired(engine, now=None):
+    """Remove every tunnel whose expiry time has passed. Returns the names removed."""
+    now = now or time.time()
+    gone = []
+    for c in engine.containers_filtered({"label": [f"{ROLE}=tunnel"]}):
+        t = expires_at(c)
+        if t and t <= now:
+            try:
+                engine.remove_container(c["Id"], force=True)
+                gone.append(_cname(c))
+            except Exception:
+                pass
+    return gone
+
+
+def schedule_removal(engine, name, expires):
+    """Backstop for links that outlive Berth: a transient systemd user timer runs `docker rm -f` at the expiry time.
+    Linux with systemd only; elsewhere Berth removes expired links the next time it runs."""
+    import shutil
+    import subprocess
+    from .engine import docker_host_env
+    from .util import host, host_which
+    if not (host_which("systemd-run") and host_which("docker")):
+        return False
+    delay = max(1, int(expires - time.time()))
+    unit = re.sub(r"[^a-zA-Z0-9_.-]", "-", f"berth-expire-{name}")
+    argv = ["systemd-run", "--user", "--quiet", "--collect", f"--unit={unit}", f"--on-active={delay}s",
+            f"--setenv=DOCKER_HOST={docker_host_env(engine.path)}", host_which("docker") or "docker",
+            "rm", "-f", name]
+    try:
+        subprocess.run(["systemctl", "--user", "stop", f"{unit}.timer"] if shutil.which("systemctl") else ["true"],
+                       capture_output=True, timeout=5)
+        return subprocess.run(host(argv), capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False

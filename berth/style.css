@@ -157,3 +157,46 @@ row.mono-title .title { font-family: monospace; }
 .share-warning { padding: 12px 14px; border-radius: 10px; background: alpha(#e5a50a, 0.16); color: mix(currentColor, #9c6e03, 0.5); }
 .share-live { color: #26a269; }
 .statusbar-share { color: #c88800; font-weight: 650; font-size: 0.85em; min-height: 20px; padding: 0 8px; margin-left: 8px; }
+
+/* ── send files ───────────────────────────────────────────────────────────── */
+.send-drop { margin: 18px auto; padding: 40px 36px 30px 36px; border-radius: 22px; max-width: 760px;
+             border: 2px dashed alpha(currentColor, 0.16); background: alpha(currentColor, 0.02); }
+.send-drop-title { font-size: 1.45em; font-weight: 750; margin-top: 6px; }
+.send-logo { -gtk-icon-shadow: 0 6px 18px alpha(black, 0.18); }
+.send-tip { padding: 14px; border-radius: 14px; background: alpha(currentColor, 0.045); }
+.accent { color: @accent_color; }
+.card.send-card { padding: var(--card-pad); min-width: 440px; }
+.send-qr { background: white; border-radius: 14px; padding: 6px; }
+.send-pin { font-family: monospace; font-size: 1.5em; font-weight: 800; letter-spacing: 0.18em; }
+.send-link { padding: 2px 4px 2px 12px; border-radius: 10px; background: alpha(currentColor, 0.06); }
+
+/* ── database cards, sharing dashboard ─────────────────────────────────────── */
+.db-cards { margin: 0 var(--page-x) var(--page-x) var(--page-x); }
+.db-cards > flowboxchild { padding: 0; }
+.card.db-card { padding: 16px; min-width: 260px; }
+.card.db-card.stopped { opacity: 0.62; }
+.db-badge { min-width: 40px; min-height: 40px; border-radius: 11px; color: white; font-weight: 800; font-size: 0.95em; }
+.card.tile.tile-warn { background: alpha(#e5a50a, 0.13); }
+.card.tile.tile-warn .tile-v { color: #c88800; }
+.sharing-page > flowbox > flowboxchild { padding: 0; }
+.brand-name { font-weight: 800; letter-spacing: -0.01em; }
+
+/* ── responsive size classes (window.size-sm … size-3xl, set by app.Window.set_size_class) ─────────────────────
+   Spacing grows with the screen, so big monitors get room to breathe instead of a laptop layout lost in white space.
+   (Density still sets row height and cell padding.) */
+window.size-sm  { --page-x: 14px; --page-y: 10px; --card-pad: 14px; --gap: 12px; }
+window.size-xl  { --page-x: 32px; --page-y: 20px; --card-pad: 22px; --gap: 20px; }
+window.size-2xl { --page-x: 40px; --page-y: 24px; --card-pad: 24px; --gap: 22px; font-size: 1.04em; }
+window.size-3xl { --page-x: 56px; --page-y: 30px; --card-pad: 28px; --gap: 26px; font-size: 1.1em; }
+window.size-2xl .page-title { font-size: 1.7em; }
+window.size-3xl .page-title { font-size: 1.85em; }
+window.size-3xl .card.db-card, window.size-2xl .card.db-card { padding: 20px; }
+window.size-3xl .tile-v { font-size: 2em; }
+.wide-prefs { margin: var(--page-y) 0 var(--page-x) 0; }
+
+/* ── tooltips: compact and calm (every icon-only button has one) ─────────── */
+tooltip { border-radius: 8px; padding: 0; }
+tooltip > box { padding: 6px 10px; }
+tooltip label { font-size: 0.92em; }
+.sharing-page .table-card { margin: 0; }           /* body padding already sets the edges: align with the tiles */
+.name-badge { font-size: 0.72em; padding: 0 7px; }

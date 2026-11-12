@@ -8,7 +8,8 @@ from gi.repository import Adw, GLib, Gtk
 
 from . import registry, theme
 from .engine import discover
-from .util import IS_LINUX, VERSION, PageHeader, bg, esc, flat_page, fmt_bytes, host
+from .util import (WidePrefs, IS_LINUX, LOG_PATH, VERSION, PageHeader, bg, diagnostic_report, esc, flat_page, fmt_bytes,
+                   host, open_uri)
 
 DAEMON_JSON = "/etc/docker/daemon.json"
 
@@ -22,7 +23,8 @@ class SettingsPage(Gtk.Box):
         self.win, self.store, self.s = win, store, settings
         tv = Adw.ToolbarView(vexpand=True)
         flat_page(tv, PageHeader("Settings", "Appearance, accessibility, the Docker Engine and registries"))
-        pp = Adw.PreferencesPage()
+        pp = WidePrefs()                                   # wider, and two columns on big screens
+        self.prefs = pp
         tv.set_content(pp)
         self.append(tv)
 
@@ -111,6 +113,27 @@ class SettingsPage(Gtk.Box):
         if IS_LINUX:                    # elsewhere the engine is configured in Docker Desktop / Colima / OrbStack
             self.eng.add(dj)
         pp.add(self.eng)
+        # local addresses proxy: visible and removable from Settings too (issue #26)
+        self.proxy_g = Adw.PreferencesGroup(title="Local addresses proxy",
+                                            description="One small Caddy container serves every name.localhost "
+                                                        "address. Nothing else runs for it.")
+        self.proxy_row = Adw.ActionRow(title="Proxy", subtitle="Not set up")
+        for text, tip, fn, css in (("Stop", "Stop the proxy; your addresses are kept", lambda: win.pages["sharing"]._stop(),
+                                    None),
+                                   ("Remove", "Remove the proxy container; your addresses are kept for later",
+                                    lambda: win.pages["sharing"]._remove(), "destructive-action")):
+            b = Gtk.Button(label=text, tooltip_text=tip, valign=Gtk.Align.CENTER)
+            if css:
+                b.add_css_class(css)
+            b.connect("clicked", lambda _b, f=fn: f())
+            self.proxy_row.add_suffix(b)
+        self.proxy_g.add(self.proxy_row)
+        manage = Adw.ActionRow(title="Addresses, ports and public links", subtitle="Open Ports &amp; sharing",
+                               activatable=True)
+        manage.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        manage.connect("activated", lambda *_: win.go("sharing"))
+        self.proxy_g.add(manage)
+        pp.add(self.proxy_g)
 
         self.reg = Adw.PreferencesGroup(title="Registries", description="Sign in to push to and pull private images from "
                                                                         "Docker Hub or another registry. Uses docker's own credential store.")
@@ -125,12 +148,28 @@ class SettingsPage(Gtk.Box):
         ab.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
         ab.connect("activated", lambda *_: win.get_application().activate_action("about", None))
         about.add(ab)
+        diag = Adw.ActionRow(title="Copy diagnostic report", activatable=True,
+                             subtitle="Version, system, engine and the latest errors — paste it into an issue or chat")
+        diag.add_suffix(Gtk.Image(icon_name="edit-copy-symbolic"))
+        diag.connect("activated", lambda *_: self._copy_diag())
+        about.add(diag)
+        logs = Adw.ActionRow(title="Open the log folder", activatable=True, subtitle=LOG_PATH)
+        logs.add_suffix(Gtk.Image(icon_name="folder-open-symbolic"))
+        logs.connect("activated", lambda *_: open_uri("file://" + os.path.dirname(LOG_PATH)))
+        about.add(logs)
         pp.add(about)
         store.connect("engine", lambda *_: self.get_mapped() and self.on_show())   # refresh only while visible
 
     def _a11y(self, key, value):
         self.s[key] = value
         theme.apply_accessibility(self.win, self.s)
+
+    def on_size(self, n):
+        self.prefs.on_size(n)
+
+    def _copy_diag(self):
+        self.get_clipboard().set(diagnostic_report(self.store))
+        self.win.toast("Diagnostic report copied")
 
     # ── engines ──
     def _fill_engines(self):
@@ -206,6 +245,11 @@ class SettingsPage(Gtk.Box):
         d.present(self.win)
 
     def on_show(self):
+        from . import sharing
+        p = sharing.proxy(self.store.containers)
+        n = len(self.s["routes"] or [])
+        self.proxy_row.set_subtitle(("Running" if p.get("State") == "running" else "Stopped") + f" · {n} address"
+                                    + ("es" if n != 1 else "") if p else "Not set up — it starts when you add an address")
         self._fill_engines()
         self._fill_registries()
         up = bool(self.store.up)

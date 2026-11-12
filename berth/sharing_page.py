@@ -64,13 +64,34 @@ class _TargetRows:
         bg(sharing.container_ports, self.store.engine, c["Id"], done=done, error=lambda e: done([]))
 
 
+EXPIRY = [("Never", None), ("After 15 minutes", 900), ("After 1 hour", 3600), ("After 4 hours", 4 * 3600),
+          ("After 1 day", 86400), ("After 1 week", 7 * 86400), ("At a date and time…", "custom")]
+
+
+def _left(t):
+    import time as _t
+    s = int(t - _t.time())
+    if s <= 0:
+        return "expiring now"
+    if s < 3600:
+        return f"stops in {max(1, s // 60)} min"
+    if s < 86400:
+        return f"stops in {s // 3600} h {(s % 3600) // 60:02d} min"
+    import datetime
+    return "stops " + datetime.datetime.fromtimestamp(t).strftime("%a %d %b, %H:%M")
+
+
 class ExposeDialog(Adw.Dialog):
-    def __init__(self, page, cid=None, port=None):
-        super().__init__(title="Add a local address", content_width=520, content_height=560)
-        self.page, self.win, self.store = page, page.win, page.store
+    def __init__(self, page, cid=None, port=None, route=None):
+        super().__init__(title="Change local address" if route else "Add a local address", content_width=520,
+                         content_height=560)
+        self.page, self.win, self.store, self.editing = page, page.win, page.store, route
+        if route:
+            c0 = next((c for c in page.store.containers if cname(c) == route["container"]), None)
+            cid, port = (c0["Id"] if c0 else None), int(route["port"])
         tv = Adw.ToolbarView()
         hb = Adw.HeaderBar()
-        self.ok = Gtk.Button(label="Add")
+        self.ok = Gtk.Button(label="Save" if route else "Add")
         self.ok.add_css_class("suggested-action")
         self.ok.connect("clicked", lambda *_: self._add())
         hb.pack_end(self.ok)
@@ -91,6 +112,14 @@ class ExposeDialog(Adw.Dialog):
                                                            "browser warnings")
         self.https.connect("notify::active", lambda *_: self._preview())
         g.add(self.https)
+        self.lan = Adw.SwitchRow(title="Phones on this Wi-Fi too",
+                                 subtitle="Also opens it at this computer's Wi-Fi address (with a QR code). Only this "
+                                          "address is opened to the network.")
+        g.add(self.lan)
+        if route:
+            self.name.set_text(route["name"])
+            self.https.set_active(bool(route.get("https")))
+            self.lan.set_active(bool(route.get("lan")))
         pp.add(g)
         self.prev = Adw.PreferencesGroup()
         self.url = Adw.ActionRow(title="", subtitle="The address", css_classes=["property"])
@@ -102,7 +131,8 @@ class ExposeDialog(Adw.Dialog):
 
     def _preview(self):
         name = self.name.get_text().strip().lower()
-        err = sharing.validate_name(name, self.page.routes())
+        others = [r for r in self.page.routes() if not (self.editing and r["name"] == self.editing["name"])]
+        err = sharing.validate_name(name, others)
         r = {"name": name or "name", "https": self.https.get_active()}
         self.url.set_title(esc(sharing.url_for(r, self.page.proxy_ports())))
         self.url.set_subtitle(esc(err) if err and name else "The address")
@@ -114,9 +144,12 @@ class ExposeDialog(Adw.Dialog):
             self.win.toast("Pick a container and a port")
             return
         route = {"name": self.name.get_text().strip().lower(), "container": cname(c), "port": port,
-                 "https": self.https.get_active()}
+                 "https": self.https.get_active(), "lan": self.lan.get_active()}
+        if self.editing and self.editing.get("lan_port") and route["lan"]:
+            route["lan_port"] = self.editing["lan_port"]
         self.ok.set_sensitive(False)
-        self.page.add_route(route, done=self.close, fail=lambda: self.ok.set_sensitive(True))
+        self.page.add_route(route, done=self.close, fail=lambda: self.ok.set_sensitive(True),
+                            replaces=self.editing["name"] if self.editing else None)
 
 
 class ShareDialog(Adw.Dialog):
@@ -151,6 +184,13 @@ class ShareDialog(Adw.Dialog):
         h.add(self.mode)
         self.token = Adw.PasswordEntryRow(title="Tunnel token (Zero Trust → Networks → Tunnels)", visible=False)
         h.add(self.token)
+        self.expiry = Adw.ComboRow(title="Stop sharing automatically",
+                                   model=Gtk.StringList.new([lbl for lbl, _s in EXPIRY]))
+        self.expiry.set_selected(2)
+        self.expiry.connect("notify::selected", lambda *_: self._expiry_changed())
+        h.add(self.expiry)
+        self.until = Adw.EntryRow(title="Until (YYYY-MM-DD HH:MM, local time)", visible=False)
+        h.add(self.until)
         self.keep = Adw.SwitchRow(title="Keep sharing after Berth closes",
                                   subtitle="Off: the link stops when you quit Berth")
         h.add(self.keep)
@@ -186,8 +226,33 @@ class ShareDialog(Adw.Dialog):
         def fail(e):
             self.ok.set_sensitive(True)
             self.status.set_text(f"Couldn't share: {e}")
+        try:
+            expires = self._expires()
+        except ValueError as e:
+            self.ok.set_sensitive(True)
+            self.status.set_text(str(e))
+            return
         bg(sharing.start_tunnel, self.store.engine, c["Id"], port, token, self.keep.get_active(), progress,
-           done=done, error=fail)
+           expires, done=done, error=fail)
+
+    def _expiry_changed(self):
+        self.until.set_visible(EXPIRY[self.expiry.get_selected()][1] == "custom")
+
+    def _expires(self):
+        import datetime
+        import time as _t
+        sec = EXPIRY[self.expiry.get_selected()][1]
+        if sec is None:
+            return None
+        if sec == "custom":
+            try:
+                when = datetime.datetime.strptime(self.until.get_text().strip(), "%Y-%m-%d %H:%M").timestamp()
+            except ValueError:
+                raise ValueError("Type the end as YYYY-MM-DD HH:MM, e.g. 2026-11-12 18:00")
+            if when <= _t.time() + 30:
+                raise ValueError("The end time is in the past")
+            return int(when)
+        return int(_t.time() + sec)
 
 
 class SharingPage(Gtk.Box):
@@ -207,7 +272,26 @@ class SharingPage(Gtk.Box):
         self.header.add(add)
         self.header.add(share)
         flat_page(tv, self.header)
-        self.pp = Adw.PreferencesPage(css_classes=["sharing-page"])
+        body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, css_classes=["page-body", "sharing-page"])
+        tiles = Gtk.FlowBox(homogeneous=True, min_children_per_line=2, max_children_per_line=4, column_spacing=12,
+                            row_spacing=12, selection_mode=Gtk.SelectionMode.NONE)
+        self.tiles = {}
+        self.tiles_box = tiles
+        for key, title in (("local", "Local addresses"), ("public", "Public links"), ("ports", "Ports in use"),
+                           ("lan", "Open to whole network")):
+            card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, css_classes=["card", "tile"])
+            card.append(label(title.upper(), css=["caption", "dim-label", "tile-k"]))
+            v = label("0", css=["tile-v", "numeric"])
+            sub_ = label("", css=["caption", "dim-label"])
+            card.append(v)
+            card.append(sub_)
+            self.tiles[key] = (card, v, sub_)
+            tiles.append(card)
+        body.append(tiles)
+        cols = Gtk.FlowBox(homogeneous=True, min_children_per_line=1, max_children_per_line=2, column_spacing=18,
+                           row_spacing=18, selection_mode=Gtk.SelectionMode.NONE, valign=Gtk.Align.START)
+        body.append(cols)
+        self.pp = cols
         # local addresses
         self.g_local = Adw.PreferencesGroup(title="Local addresses",
                                             description="name.localhost → a container port. Only this computer can "
@@ -220,24 +304,107 @@ class SharingPage(Gtk.Box):
         self.proxy_menu.set_popover(self._proxy_popover())
         hdr.append(self.proxy_menu)
         self.g_local.set_header_suffix(hdr)
-        self.pp.add(self.g_local)
+        self.pp.append(self.g_local)
         self.local_rows = []
         # public links
         self.g_public = Adw.PreferencesGroup(title="Public links",
                                              description="Anyone with the link can open these. Each one stops when "
                                                          "Berth quits, unless you chose to keep it.")
-        self.pp.add(self.g_public)
+        self.public_pill = label("", css=["status-pill", "muted"], ellipsize=False, valign=Gtk.Align.CENTER)
+        self.g_public.set_header_suffix(self.public_pill)   # mirrors the proxy pill of the other column
+        self.pp.append(self.g_public)
         self.public_rows = []
-        # ports in use
-        self.g_ports = Adw.PreferencesGroup(title="Ports in use",
-                                            description="Published ports of your containers. ⚠ marks ports open to "
-                                                        "your whole network, not just this computer.")
-        self.pp.add(self.g_ports)
-        self.port_rows = []
-        tv.set_content(self.pp)
+        # ports in use: one line per port, full width
+        head = Gtk.Box(spacing=12)
+        col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, hexpand=True)
+        col.append(label("Ports in use", css=["heading"]))
+        col.append(label("Every published port. “Whole network” means other devices on your Wi-Fi can reach it — "
+                         "fine for a web app, risky for a database.", css=["dim-label", "caption"], wrap=True))
+        head.append(col)
+        self.port_find = Gtk.SearchEntry(placeholder_text="Filter ports", valign=Gtk.Align.CENTER, width_chars=22)
+        self.port_find.connect("search-changed", lambda *_: self._ports_filter.changed(Gtk.FilterChange.DIFFERENT))
+        head.append(self.port_find)
+        body.append(head)
+        self._build_ports_table(body)
+        tv.set_content(Gtk.ScrolledWindow(child=body, hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True))
         self.append(tv)
         store.connect("containers", lambda *_: self.on_show())
         self.on_show()
+
+    def on_size(self, n):
+        from .util import per_size, set_columns
+        set_columns(self.tiles_box, per_size(n, 2, 2, 4, 4, 4, 4))
+        set_columns(self.pp, per_size(n, 1, 1, 2, 2, 2, 2))
+
+    def _build_ports_table(self, body):
+        from gi.repository import Gio, GObject, Pango
+        from .util import table_card
+
+        class _P(GObject.Object):
+            def __init__(self, d):
+                super().__init__()
+                self.d = d
+        self._P = _P
+        self.port_model = Gio.ListStore(item_type=_P)
+        q = lambda: self.port_find.get_text().strip().lower()
+        self._ports_filter = Gtk.CustomFilter.new(
+            lambda it, _d: not q() or q() in f"{it.d['public']} {it.d['container']} {it.d['private']}".lower(), None)
+        view = Gtk.ColumnView(model=Gtk.NoSelection(model=Gtk.FilterListModel(model=self.port_model,
+                                                                               filter=self._ports_filter)),
+                              show_row_separators=True)
+        view.add_css_class("berth-table")
+        view.add_css_class("data-table")
+
+        def col(title, make, upd, expand=False, width=-1):
+            f = Gtk.SignalListItemFactory()
+            f.connect("setup", lambda _f, li: li.set_child(make()))
+            f.connect("bind", lambda _f, li: upd(li.get_child(), li.get_item().d))
+            c = Gtk.ColumnViewColumn(title=title, factory=f, expand=expand, resizable=True)
+            if width > 0:
+                c.set_fixed_width(width)
+            view.append_column(c)
+
+        def lab(css=()):
+            return lambda: label("", css=list(css))
+        col("Port on this computer", lab(["monospace", "heading-sm"]),
+            lambda w, d: w.set_text(f"localhost:{d['public']}"), width=190)
+        col("Container", lambda: label("", ellipsize=True), lambda w, d: w.set_text(d["container"]), expand=True)
+        col("Inside", lab(["monospace", "dim-label"]), lambda w, d: w.set_text(str(d["private"])), width=90)
+
+        def badge_upd(w, d):
+            w.set_text("Whole network ⚠" if d["lan"] else "This computer only")
+            w.set_css_classes(["status-pill", "warn" if d["lan"] else "ok"])
+            w.set_tooltip_text(f"Bound to {d['ip']}")
+        col("Who can reach it", lambda: label("", ellipsize=False, halign=Gtk.Align.START), badge_upd, width=180)
+
+        def acts():
+            box = Gtk.Box(spacing=2, halign=Gtk.Align.END)
+            box.d = None
+            from . import quick
+            for icon, tip, fn in (
+                    ("adw-external-link-symbolic", "Open in the browser",
+                     lambda d: open_uri(f"http://localhost:{d['public']}")),
+                    ("document-edit-symbolic", "Change the port, or who can reach it",
+                     lambda d: quick.PortsDialog(self.win, self.store, d["id"]).present(self.win)),
+                    ("network-server-symbolic", "Give it a name.localhost address",
+                     lambda d: ExposeDialog(self, d["id"], d["private"]).present(self.win)),
+                    ("network-workgroup-symbolic", "Share publicly (Cloudflare)",
+                     lambda d: ShareDialog(self, d["id"], d["private"]).present(self.win))):
+                b = icon_button(icon, tip)
+                b.connect("clicked", lambda _b, f=fn, bx=box: bx.d and f(bx.d))
+                box.append(b)
+            return box
+
+        def acts_upd(box, d):
+            box.d = d
+        col("", acts, acts_upd, width=150)
+        card = table_card(view)
+        sw = card.get_first_child()
+        sw.set_propagate_natural_height(True)               # the page scrolls, not a small box inside it
+        sw.set_policy(Gtk.PolicyType.NEVER, Gtk.PolicyType.NEVER)
+        sw.set_vexpand(False)
+        card.set_vexpand(False)
+        body.append(card)
 
     # ── settings ──
     def routes(self):
@@ -291,7 +458,7 @@ class SharingPage(Gtk.Box):
         routes, ports = self.routes(), self.proxy_ports()
 
         def work():
-            pid = sharing.start_proxy(self.store.engine, ports)
+            pid = sharing.start_proxy(self.store.engine, ports, lan=sharing.lan_ports(routes))
             sharing.apply_routes(self.store.engine, routes, pid)
             return pid
         bg(work, done=lambda _p: (self.store.refresh("containers"), then and then()),
@@ -330,8 +497,12 @@ class SharingPage(Gtk.Box):
         bg(sharing.root_certificate, self.store.engine, p["Id"], done=got, error=lambda e: self.win.toast(str(e)))
 
     # ── actions ──
-    def add_route(self, route, done=None, fail=None):
-        routes = [r for r in self.routes() if r["name"] != route["name"]] + [route]
+    def add_route(self, route, done=None, fail=None, replaces=None):
+        others = [r for r in self.routes() if r["name"] not in (route["name"], replaces)]
+        if not route.get("lan"):
+            route.pop("lan_port", None)
+        sharing.assign_lan_port(others, route)
+        routes = others + [route]
         self.settings["routes"] = routes
         url = sharing.url_for(route, self.proxy_ports())
 
@@ -347,7 +518,7 @@ class SharingPage(Gtk.Box):
         ports = self.proxy_ports()
 
         def work():
-            pid = sharing.start_proxy(self.store.engine, ports)
+            pid = sharing.start_proxy(self.store.engine, ports, lan=sharing.lan_ports(routes))
             return sharing.apply_routes(self.store.engine, routes, pid)
         bg(work, done=lambda _u: (self.store.refresh("containers"), ok()), error=bad)
 
@@ -356,7 +527,12 @@ class SharingPage(Gtk.Box):
         self.settings["routes"] = routes
         p = sharing.proxy(self.store.containers)
         if p and p.get("State") == "running":
-            bg(sharing.apply_routes, self.store.engine, routes, p["Id"], error=lambda e: self.win.toast(str(e)))
+            ports, eng = self.proxy_ports(), self.store.engine
+
+            def work():       # recreate if a phone port must close, then reload the routes
+                pid = sharing.start_proxy(eng, ports, lan=sharing.lan_ports(routes))
+                return sharing.apply_routes(eng, routes, pid)
+            bg(work, done=lambda _r: self.store.refresh("containers"), error=lambda e: self.win.toast(str(e)))
         self.on_show()
 
     def shared(self, url, target, port):
@@ -377,19 +553,18 @@ class SharingPage(Gtk.Box):
         go()
 
     def _qr(self, url):
-        try:
-            png = subprocess.run(host(["qrencode", "-o", "-", "-s", "8", "-m", "2", url]), capture_output=True,
-                                 timeout=5).stdout          # host(): through flatpak-spawn inside the Flatpak
-        except (OSError, subprocess.SubprocessError):
-            return
-        tex = Gdk.Texture.new_from_bytes(GLib.Bytes.new(png))
-        d = Adw.Dialog(title="Scan to open", content_width=360, content_height=420)
+        from .send_page import _qr_picture
+        d = Adw.Dialog(title="Scan to open", content_width=360, content_height=440)
         tv = Adw.ToolbarView()
         tv.add_top_bar(Adw.HeaderBar())
-        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=10, margin_top=12, margin_bottom=18,
-                      margin_start=18, margin_end=18)
-        box.append(Gtk.Picture(paintable=tex, can_shrink=True, vexpand=True))
-        box.append(label(url, css=["caption", "monospace"], xalign=0.5, selectable=True))
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=12, margin_top=8, margin_bottom=20,
+                      margin_start=20, margin_end=20)
+        pic = _qr_picture(url, 280)
+        pic.set_vexpand(True)
+        box.append(pic)
+        box.append(label(url, css=["monospace"], xalign=0.5, selectable=True, wrap=True))
+        box.append(label("Point your phone's camera at the code. It must be on the same Wi-Fi unless this is a public "
+                         "link.", css=["caption", "dim-label"], xalign=0.5, wrap=True, justify=Gtk.Justification.CENTER))
         tv.set_content(box)
         d.set_child(tv)
         d.present(self.win)
@@ -399,6 +574,8 @@ class SharingPage(Gtk.Box):
         cs = self.store.containers
         p = sharing.proxy(cs)
         running = bool(p and p.get("State") == "running")
+        if not self.get_mapped() and self.local_rows:     # hidden: only keep the routes pointing at the right place
+            return self._reapply(running, p)
         self.proxy_pill.set_text("Proxy running" if running else "Proxy stopped" if p else "Proxy not set up")
         self.proxy_pill.set_css_classes(["status-pill", "ok" if running else "muted"])
         ports = self.proxy_ports()
@@ -411,14 +588,21 @@ class SharingPage(Gtk.Box):
             url = sharing.url_for(r, ports)
             tgt = byname.get(r["container"])
             alive = tgt is not None and tgt.get("State") == "running"
+            phone = sharing.lan_url(r) if r.get("lan") and r.get("lan_port") else None
             row = Adw.ActionRow(title=esc(url), subtitle=esc(f"→ {r['container']}:{r['port']}" +
-                                                             ("" if alive else " · not running")))
+                                                             ("" if alive else " · not running") +
+                                                             (f" · phones: {phone}" if phone else "")))
+            if phone:
+                row.add_suffix(icon_button("phone-symbolic", "Open on your phone (QR code)",
+                                           lambda _b=None, u=phone: self._qr(u)))
             row.add_css_class("mono-title")
             ob = icon_button("adw-external-link-symbolic", "Open", lambda _b=None, u=url: open_uri(u))
             ob.set_sensitive(running and alive)
             row.add_suffix(ob)
             row.add_suffix(icon_button("edit-copy-symbolic", "Copy address",
                                        lambda _b=None, u=url: (self.get_clipboard().set(u), self.win.toast("Copied"))))
+            row.add_suffix(icon_button("document-edit-symbolic", "Change name, container or port",
+                                       lambda _b=None, rr=dict(r): ExposeDialog(self, route=rr).present(self.win)))
             row.add_suffix(icon_button("user-trash-symbolic", "Remove address",
                                        lambda _b=None, n=r["name"]: self.remove_route(n)))
             self.g_local.add(row)
@@ -446,6 +630,9 @@ class SharingPage(Gtk.Box):
             sub = f"→ {key[0]}:{key[1]} · " + ("Cloudflare tunnel (token)" if token else "Cloudflare quick tunnel")
             if lab.get(sharing.KEEP) == "1":
                 sub += " · keeps running"
+            exp = sharing.expires_at(c)
+            if exp:
+                sub += f" · {_left(exp)}"
             if not alive:
                 sub += " · stopped"
             row = Adw.ActionRow(title=esc(title), subtitle=esc(sub))
@@ -455,8 +642,7 @@ class SharingPage(Gtk.Box):
                 row.add_suffix(icon_button("adw-external-link-symbolic", "Open", lambda _b=None, u=url: open_uri(u)))
                 row.add_suffix(icon_button("edit-copy-symbolic", "Copy link",
                                            lambda _b=None, u=url: (self.get_clipboard().set(u), self.win.toast("Copied"))))
-                if host_which("qrencode"):
-                    row.add_suffix(icon_button("view-grid-symbolic", "QR code", lambda _b=None, u=url: self._qr(u)))
+                row.add_suffix(icon_button("phone-symbolic", "QR code for your phone", lambda _b=None, u=url: self._qr(u)))
             stop = Gtk.Button(label="Stop sharing", valign=Gtk.Align.CENTER)
             stop.add_css_class("destructive-action")
             stop.connect("clicked", lambda _b, cc=c: self._stop_tunnel(cc))
@@ -476,31 +662,25 @@ class SharingPage(Gtk.Box):
             self.g_public.add(row)
             self.public_rows.append(row)
 
-        for r in self.port_rows:
-            self.g_ports.remove(r)
-        self.port_rows = []
-        for p in sharing.published(cs):
-            shown_ip = "0.0.0.0" if p["lan"] else p["ip"]
-            row = Adw.ActionRow(title=esc(f"localhost:{p['public']}  →  {p['container']}:{p['private']}"),
-                                subtitle=esc(f"⚠ open to your whole network ({shown_ip})" if p["lan"]
-                                             else f"this computer only ({shown_ip})"))
-            row.add_css_class("mono-title")
-            row.add_suffix(icon_button("adw-external-link-symbolic", f"Open localhost:{p['public']}",
-                                       lambda _b=None, n=p["public"]: open_uri(f"http://localhost:{n}")))
-            a = Gtk.Button(label="Address", valign=Gtk.Align.CENTER, tooltip_text="Give it a name.localhost address")
-            a.add_css_class("flat")
-            a.connect("clicked", lambda _b, q=p: ExposeDialog(self, q["id"], q["private"]).present(self.win))
-            row.add_suffix(a)
-            s = Gtk.Button(label="Share", valign=Gtk.Align.CENTER, tooltip_text="Share publicly")
-            s.add_css_class("flat")
-            s.connect("clicked", lambda _b, q=p: ShareDialog(self, q["id"], q["private"]).present(self.win))
-            row.add_suffix(s)
-            self.g_ports.add(row)
-            self.port_rows.append(row)
-        if not self.port_rows:
-            row = Adw.ActionRow(title="No published ports")
-            self.g_ports.add(row)
-            self.port_rows.append(row)
+        pub = sharing.published(cs)
+        self.port_model.splice(0, self.port_model.get_n_items(), [self._P(p) for p in pub])
+        nlive = sum(1 for c in tun if c.get("State") == "running")
+        self.public_pill.set_text(f"{nlive} live" if nlive else "Nothing public")
+        self.public_pill.set_css_classes(["status-pill", "warn" if nlive else "muted"])
+        self.public_pill.set_tooltip_text("Links reachable from the internet right now")
+        lan = [p for p in pub if p["lan"]]
+        nloc = len(self.routes())
+        phones = sum(1 for r in self.routes() if r.get("lan"))
+        live = sum(1 for c in tun if c.get("State") == "running")
+        for key, val, note in (("local", nloc, (f"{phones} open to phones · " if phones else "") +
+                                ("proxy running" if running else "proxy off")),
+                               ("public", live, "on the internet now" if live else "nothing public"),
+                               ("ports", len(pub), f"{len({p['container'] for p in pub})} containers"),
+                               ("lan", len(lan), "reachable from your Wi-Fi" if lan else "all private")):
+            card, v, s_ = self.tiles[key]
+            v.set_text(str(val))
+            s_.set_text(note)
+            (card.add_css_class if key == "lan" and lan else card.remove_css_class)("tile-warn")
         n = sum(1 for c in tun if c.get("State") == "running")
         self.header.set_subtitle(f"{len(self.routes())} local address{'es' if len(self.routes()) != 1 else ''} · "
                                  f"{n} public link{'s' if n != 1 else ''} · {len(sharing.published(cs))} ports in use")

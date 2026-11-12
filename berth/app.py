@@ -18,6 +18,7 @@ if "GSK_RENDERER" not in os.environ and Gtk.get_major_version() == 4 and Gtk.get
 from .containers import ContainersPage  # noqa: E402
 from .db_page import DatabasesPage  # noqa: E402
 from .sharing_page import SharingPage  # noqa: E402
+from .send_page import SendPage  # noqa: E402
 from . import theme  # noqa: E402
 from .theme import apply_accessibility  # noqa: E402
 from .files import cleanup_helpers  # noqa: E402
@@ -26,11 +27,11 @@ from .logs import LogsPage  # noqa: E402
 from .pages import BuildHistoryPage, BuildsPage, DiskPage, ImagesPage, NetworksPage, ResourcesPage, VolumesPage  # noqa: E402
 from .settings_page import SettingsPage  # noqa: E402
 from .store import Store  # noqa: E402
-from .util import APP_ID, VERSION, app_icon, themed, Settings, fmt_bytes, fmt_pct, icon_button, label, spawn  # noqa: E402
+from .util import ensure_tooltips, APP_ID, VERSION, app_icon, themed, Settings, fmt_bytes, fmt_pct, icon_button, label, spawn  # noqa: E402
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGES = [("containers", ContainersPage), ("images", ImagesPage), ("volumes", VolumesPage), ("networks", NetworksPage),
-         ("databases", DatabasesPage), ("sharing", SharingPage),
+         ("databases", DatabasesPage), ("sharing", SharingPage), ("send", SendPage),
          ("logs", LogsPage), ("resources", ResourcesPage), ("disk", DiskPage),
          ("builds", BuildHistoryPage), ("cache", BuildsPage),
          ("kubernetes", K8sPage),
@@ -38,6 +39,9 @@ PAGES = [("containers", ContainersPage), ("images", ImagesPage), ("volumes", Vol
 # Sidebar sections: the first page of each group gets a small heading; Settings sits apart at the bottom.
 GROUPS = {"containers": "Manage", "databases": "Connect", "logs": "Observe", "builds": "Build",
           "kubernetes": "Orchestrate"}
+# window size classes: (name, from, to) in sp — like Tailwind's sm … 3xl
+SIZES = [("sm", 0, 900), ("md", 900, 1280), ("lg", 1280, 1600), ("xl", 1600, 1920), ("2xl", 1920, 2560),
+         ("3xl", 2560, None)]
 THEMES = {"system": Adw.ColorScheme.DEFAULT, "light": Adw.ColorScheme.FORCE_LIGHT, "dark": Adw.ColorScheme.FORCE_DARK}
 
 
@@ -57,7 +61,10 @@ class Window(Adw.ApplicationWindow):
         # sidebar
         side = Adw.ToolbarView()
         sh = Adw.HeaderBar()
-        sh.set_title_widget(Adw.WindowTitle(title="Berth"))
+        brand = Gtk.Box(spacing=8, halign=Gtk.Align.CENTER, css_classes=["brand"])
+        brand.append(Gtk.Image(icon_name=app_icon(), pixel_size=24))
+        brand.append(Gtk.Label(label="Berth", css_classes=["brand-name"]))
+        sh.set_title_widget(brand)
         menu = Gio.Menu()
         theme = Gio.Menu()
         for k, lbl in (("system", "Follow system"), ("light", "Light"), ("dark", "Dark")):
@@ -111,7 +118,7 @@ class Window(Adw.ApplicationWindow):
             self.stack.add_named(p, key)
         off = Adw.ToolbarView()
         off.add_top_bar(Adw.HeaderBar())
-        self.off_page = Adw.StatusPage(icon_name="system-shutdown-symbolic", title="Docker Engine is not running",
+        self.off_page = Adw.StatusPage(icon_name=app_icon(), title="Docker Engine is not running",
                                        description="Berth needs a running Docker Engine.")
         start = Gtk.Button(label="Start Docker Engine", halign=Gtk.Align.CENTER)
         start.add_css_class("pill")
@@ -135,14 +142,20 @@ class Window(Adw.ApplicationWindow):
         self.connect("notify::is-active", lambda *_: self.update_saver())
         self.connect("notify::suspended", lambda *_: self.update_saver())
         self.connect("close-request", self._on_close)
-        # Responsive columns: on narrow windows the least important table columns step aside.
-        bp = Adw.Breakpoint.new(Adw.BreakpointCondition.parse("max-width: 1180sp"))
-        for col in (self.pages["containers"].col_image, self.pages["containers"].col_ports,
-                    self.pages["images"].col_id, self.pages["images"].c_created):
-            bp.add_setter(col, "visible", False)
-        for prop in ("min-children-per-line", "max-children-per-line"):   # resource tiles: 4 across → 2 × 2
-            bp.add_setter(self.pages["resources"].tiles_box, prop, 2)
-        self.add_breakpoint(bp)     # one breakpoint only: libadwaita applies just the last matching one
+        # dialogs (and the pages they cover) get tooltips for their stock icon buttons as they open
+        self.connect("notify::visible-dialog", lambda w, _p: w.get_visible_dialog() and
+                     GLib.timeout_add(250, lambda: ensure_tooltips(w.get_visible_dialog() or w)))
+        GLib.timeout_add_seconds(30, self._sweep_links)
+        # Responsive layout: one size class at a time (sm … 3xl). Each class is a breakpoint whose "apply" tells every
+        # page; pages pick their own column counts, and style.css scales spacing and type per class. The ranges are in
+        # sp, so a larger text size behaves like a smaller screen (accessibility first).
+        self.size_class = None
+        for name, lo, hi in SIZES:
+            cond = " and ".join(c for c in (f"min-width: {lo}sp" if lo else "", f"max-width: {hi - 1}sp" if hi else "")
+                                if c)
+            bp = Adw.Breakpoint.new(Adw.BreakpointCondition.parse(cond))
+            bp.connect("apply", lambda _b, n=name: self.set_size_class(n))
+            self.add_breakpoint(bp)
         self.set_size_request(760, 520)
         apply_accessibility(self, settings)
         self.page = settings["page"] if settings["page"] in self.pages else "containers"
@@ -150,6 +163,21 @@ class Window(Adw.ApplicationWindow):
         self.stack.set_visible_child_name("off")
         self._sync_theme_btn()
         Adw.StyleManager.get_default().connect("notify::dark", lambda *_: self._sync_theme_btn())
+
+    def set_size_class(self, n):
+        if n == self.size_class:
+            return
+        for name, _lo, _hi in SIZES:
+            self.remove_css_class(f"size-{name}")
+        self.add_css_class(f"size-{n}")
+        self.size_class = n
+        wide = n not in ("sm", "md")                     # the least important table columns step aside below lg
+        for col in (self.pages["containers"].col_image, self.pages["containers"].col_ports,
+                    self.pages["images"].col_id, self.pages["images"].c_created):
+            col.set_visible(wide)
+        for p in self.pages.values():
+            if hasattr(p, "on_size"):
+                p.on_size(n)
 
     def _sidebar_header(self, row, before):
         title = GROUPS.get(row.key)
@@ -258,6 +286,19 @@ class Window(Adw.ApplicationWindow):
         from .util import confirm
         confirm(self, "Stop Docker Engine?", "Every running container stops. Your system asks for your password.",
                 "Stop Engine", lambda: (self._systemctl("stop"), self.toast("Stopping Docker Engine…")))
+
+    def _sweep_links(self):
+        """Remove public links whose expiry time has passed. No engine call unless such a link exists."""
+        from . import sharing
+        now = __import__("time").time()
+        if self.store.up and any(sharing.expires_at(c) and sharing.expires_at(c) <= now + 1
+                                 for c in sharing.tunnels(self.store.containers)):
+            from .util import bg
+            bg(sharing.remove_expired, self.store.engine,
+               done=lambda gone: gone and (self.toast(f"Public link expired and stopped: {', '.join(gone)}"),
+                                           self.store.refresh("containers")),
+               error=lambda e: None)
+        return True
 
     def _counts(self):
         cs = self.store.containers
@@ -488,6 +529,11 @@ class App(Adw.Application):
     def do_shutdown(self):
         """Public links stop with Berth unless the user chose to keep them (a share should never outlive the app
         by accident)."""
+        if self.win is not None:
+            try:
+                self.win.pages["send"].shutdown()        # file shares never outlive Berth
+            except Exception:  # noqa: BLE001
+                pass
         if self.win is not None and self.win.store.up and not self.shot:
             try:
                 from .sharing import stop_unpinned
@@ -525,6 +571,8 @@ class App(Adw.Application):
 
 def main(argv=None):
     argv = list(sys.argv if argv is None else argv)
+    from .util import install_error_log
+    install_error_log()
     if "--version" in argv:
         print(f"Berth {VERSION}")
         return 0

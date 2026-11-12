@@ -493,6 +493,38 @@ def scenario(app):
     eng.remove_container(rcid)
     os.environ.pop("DOCKER_CONFIG", None)
 
+    # 11b. databases (issue #25): the demo Postgres and Redis are listed, browsable and queryable, also from the
+    #      Database tab of the container
+    from berth import db as dbm
+    dp = win.pages["databases"]
+    win.go("databases")
+    yield from wait_for(lambda: dp.model.get_n_items() >= 2, 20)
+    names = [dp.model.get_item(i).data["Names"][0] for i in range(dp.model.get_n_items())]
+    check("Databases page lists the demo Postgres and Redis", "/shop-db-1" in names and "/shop-cache-1" in names, names)
+    for cn, q in (("shop-db-1", "select 42 as answer"), ("shop-cache-1", "PING")):
+        c = next((c for c in st.containers if c["Names"][0] == "/" + cn), None)
+        if not c:
+            check(f"{cn} present", False)
+            continue
+        b = dbm.open_backend(eng, eng.inspect(c["Id"]))
+        try:
+            r = yield from _in_thread(lambda b=b, q=q: (b.connect(), b.tree(), b.query(q))[2], 90)
+            ok = (r.rows == [["42"]]) if cn == "shop-db-1" else "PONG" in (r.text or "")
+            check(f"Explorer queries {cn}", ok, r.rows or r.text)
+        except Exception as e:  # noqa: BLE001
+            check(f"Explorer queries {cn}", False, e)
+    pg = next((c for c in st.containers if c["Names"][0] == "/shop-db-1"), None)
+    if pg:
+        cp = win.pages["containers"]
+        win.go("containers")
+        cp.open_detail(pg["Id"])
+        yield 2
+        det = cp.nav.get_visible_page()
+        det.tabs.set_visible_child_name("database")
+        ok = yield from wait_for(lambda: getattr(getattr(det, "explorer", None), "nodes", None) is not None, 60)
+        check("Database tab on the container opens the explorer", ok)
+        cp.nav.pop_to_tag("list")
+
     # 12. engine switching (Settings → Connected engine)
     sp = win.pages["settings"]
     real = eng.path

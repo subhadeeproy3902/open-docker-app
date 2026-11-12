@@ -5,6 +5,52 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added — Send files (share0-style), phones, renames
+- **Send files**: share files or folders straight from disk with a Wi-Fi link + QR code (no app, no account, nothing
+  uploaded first); video/image preview, Range requests (seek, resume), folder browsing, download-everything .zip, PIN,
+  expiry, download limit; **receive mode** (a phone uploads into a folder, never overwriting); one-tap **public link**
+  (Cloudflare quick tunnel) for networks that block phones; firewall check + "Allow" (firewalld via polkit, ufw via
+  pkexec, until reboot). Built-in QR generator (`berth/qr.py`, no dependency, verified with a decoder).
+- **Phones for local addresses**: "Phones on this Wi-Fi too" gives an address its own Wi-Fi port and QR code; only
+  that port is published to the network.
+- **Rename / change ports everywhere**: ⋮ on container, image, volume and database rows; Rename container (live),
+  Change ports (per port "this computer only" / "whole network", conflict check), Rename image (tag + untag),
+  Rename volume (stop users → copy → re-point → restart → delete old), Clone volume; database explorer renames
+  tables/views/keys/collections and Postgres databases (only with "Allow changes").
+- Public links can **expire** (15 min … 1 week, or a date); Berth sweeps them, a systemd user timer is the backstop.
+- **Database tab** on every database container's detail page: the explorer opens right there.
+- Container list shows **"public"** and **"address"** badges next to names that are shared or have a local address.
+- **Settings → Local addresses proxy**: status, Stop, Remove, and a shortcut to Ports & sharing.
+- Every icon-only button has a tooltip (incl. libadwaita's own back/menu buttons). `tools/ui_audit.py` walks every
+  page, tab and dialog and fails on an icon button without a tooltip or a field without a hint.
+- **Diagnostics**: every error goes to `~/.cache/berth/berth.log`; Settings → Copy diagnostic report / Open the log
+  folder.
+
+### Changed
+- **Responsive on every screen size**: the window has size classes (sm < 900, md, lg ≥ 1280, xl ≥ 1600, 2xl ≥ 1920,
+  3xl ≥ 2560 sp). Spacing and type scale up on xl–3xl; grids pick their columns per class (databases 1→6, send cards
+  1→4, resource tiles 2→4, dashboard 1→2); tables share extra width across columns; Settings is wider and two columns
+  on 2xl / 3xl. Ranges are in sp, so a larger text size behaves like a smaller screen.
+- **Ports & sharing** is a dashboard: summary tiles (incl. ports open to the whole network), addresses and public links,
+  and a one-line-per-port table with exposure badges and actions. **Databases** are cards with engine badges,
+  status, exposure and Open / Start. The Berth logo is in the sidebar and on the engine-off screen.
+
+### Fixed
+- **Large values in the database explorer** ("field larger than field limit (131072)" on a Postgres table with
+  big checkpoint blobs): long text is cut on the server to 4,000 characters with the full length shown, binary
+  columns show their size, huge Redis strings/hashes are sampled, pages that are still too large shrink
+  automatically (200 → 50 → 10 → 1 rows), and error messages are capped. Covered for Postgres, MySQL/MariaDB,
+  Redis, MongoDB, SQLite and the HTTP engines.
+- Change ports warns when the port is already used by another program on this computer, not only by containers.
+- Database, Send files and Ports & sharing cards have equal heights, aligned rows and buttons at the same place.
+- **Memory leak (up to 2.7 GB over a day)**: list pages rebuilt every row every 30 s, even when hidden, and the old
+  rows could never be freed. Rows are now updated in place; hidden pages don't rebuild. Detail pages release their
+  logs and streams when left.
+- The database explorer opened the empty default database in multi-database containers (e.g. 25 databases, "postgres"
+  empty): it now opens the one with data.
+- Recreating a container (Edit / ports) re-published 127.0.0.1-only ports on all interfaces.
+- A locked (PIN) share page no longer shows the file names before the PIN is entered.
+
 ### Added — Connect (sidebar section)
 - **Databases** (#25): find database containers and explore them — PostgreSQL (incl. PostGIS, TimescaleDB, pgvector),
   MySQL / MariaDB, Redis / Valkey, MongoDB, Vespa, OpenSearch / Elasticsearch, Typesense, Meilisearch, and SQLite files

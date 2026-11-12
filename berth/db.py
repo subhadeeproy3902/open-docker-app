@@ -1252,7 +1252,7 @@ class Vespa(Backend):
     kind = "vespa"
     language = "yql"
     multi_db = False
-    write_capable = False
+    write_capable = True             # documents are edited through the document API (db_edit.VespaEdit)
 
     def __init__(self, engine, ins):
         super().__init__(engine, ins)

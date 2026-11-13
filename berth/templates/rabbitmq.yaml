@@ -1,0 +1,11 @@
+# title: RabbitMQ
+# description: RabbitMQ with the management UI. Sign in as guest / guest.
+# open: http://localhost:15672
+services:
+  rabbitmq:
+    image: rabbitmq:4-management-alpine
+    ports: ["127.0.0.1:5672:5672", "127.0.0.1:15672:15672"]
+    volumes: [rabbitmq:/var/lib/rabbitmq]
+    restart: unless-stopped
+volumes:
+  rabbitmq:

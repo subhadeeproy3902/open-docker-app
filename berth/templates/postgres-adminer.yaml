@@ -1,0 +1,23 @@
+# title: PostgreSQL + Adminer
+# description: PostgreSQL 17 with its data in a volume, and Adminer to browse it in the browser.
+# open: http://localhost:8088
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_PASSWORD: postgres
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [pgdata:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD", "pg_isready", "-U", "postgres"]
+      interval: 5s
+    restart: unless-stopped
+  adminer:
+    image: adminer:latest
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports: ["127.0.0.1:8088:8080"]
+    depends_on: [db]
+    restart: unless-stopped
+volumes:
+  pgdata:

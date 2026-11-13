@@ -1,0 +1,21 @@
+# title: MariaDB + Adminer
+# description: MariaDB 11 (MySQL compatible) with its data in a volume, and Adminer to browse it.
+# open: http://localhost:8089
+services:
+  db:
+    image: mariadb:11
+    environment:
+      MARIADB_ROOT_PASSWORD: root
+      MARIADB_DATABASE: app
+    ports: ["127.0.0.1:3306:3306"]
+    volumes: [mariadb:/var/lib/mysql]
+    restart: unless-stopped
+  adminer:
+    image: adminer:latest
+    environment:
+      ADMINER_DEFAULT_SERVER: db
+    ports: ["127.0.0.1:8089:8080"]
+    depends_on: [db]
+    restart: unless-stopped
+volumes:
+  mariadb:

@@ -44,6 +44,16 @@ class StacksPage(Gtk.Box):
                          tooltip_text="Start a stack from a compose.yaml (it is checked first)")
         run.add_css_class("suggested-action")
         run.connect("clicked", lambda *_: compose.ComposeOpen(self.win, self.store).present(self.win))
+        tpl = Gtk.Button(label="Templates…", valign=Gtk.Align.CENTER,
+                         tooltip_text="One-click stacks: databases, queues, search, storage, AI…")
+        tpl.connect("clicked", lambda *_: __import__("berth.templates", fromlist=["x"]).TemplatesDialog(
+            self.win, self.store).present(self.win))
+        dz = Gtk.Button(label="Dockerize a folder…", valign=Gtk.Align.CENTER,
+                        tooltip_text="Write a Dockerfile, .dockerignore and compose.yaml for a project")
+        dz.connect("clicked", lambda *_: __import__("berth.dockerize", fromlist=["x"]).DockerizeDialog(
+            self.win, self.store).present(self.win))
+        self.header.add(dz)
+        self.header.add(tpl)
         self.header.add(run)
         flat_page(tv, self.header)
         self.pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))

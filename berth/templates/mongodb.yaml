@@ -1,0 +1,22 @@
+# title: MongoDB + Mongo Express
+# description: MongoDB 8 with its data in a volume, and Mongo Express to browse it.
+# open: http://localhost:8091
+services:
+  mongo:
+    image: mongo:8
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: root
+    ports: ["127.0.0.1:27017:27017"]
+    volumes: [mongo:/data/db]
+    restart: unless-stopped
+  express:
+    image: mongo-express:latest
+    environment:
+      ME_CONFIG_MONGODB_URL: mongodb://root:root@mongo:27017/
+      ME_CONFIG_BASICAUTH: "false"
+    ports: ["127.0.0.1:8091:8081"]
+    depends_on: [mongo]
+    restart: unless-stopped
+volumes:
+  mongo:

@@ -71,8 +71,8 @@ all of them).
 
 - [x] **P1** Build an image from a Dockerfile or folder (with live log; BuildKit through the CLI, the engine API without it)
 - [x] **P1** "Update available" for images and the containers that use them; update and recreate in one click
-- [ ] **P2** Browse a private registry's repositories and tags; delete remote tags
-- [ ] **P2** Layer and file size breakdown (what makes an image big)
+- [x] **P2** Browse a private registry's repositories and tags; delete remote tags
+- [x] **P2** Layer size breakdown (what makes an image big); files per layer still open
 - [x] **P2** Safe updates: scan the new version first, keep the current one if it adds critical / high vulnerabilities
 - [x] **P3** Scan history (last 10 scans per image, compared in the scan window)
 - [x] **P3** Scheduled vulnerability scans (daily / weekly, images in use) and a Security column
@@ -88,7 +88,7 @@ all of them).
 
 - [x] **P1** A Stacks view: every Compose project (also ones taken down) with up / down / pull / restart, check, edit, logs
 - [x] **P1** Check a Compose file before running it (errors, unset variables, port clashes, names, build folders, env files)
-- [ ] **P2** Templates: one-click stacks (Postgres + pgAdmin, WordPress, Redis, …)
+- [x] **P2** Templates: one-click stacks (13 in berth/templates/) and Dockerize a folder
 - [ ] **P2** Deploy a stack from a Git repository and redeploy on changes
 - [ ] **P3** Edit `.env` files with validation
 

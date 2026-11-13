@@ -1,0 +1,14 @@
+# title: Meilisearch
+# description: A fast search engine with its built-in search preview. The master key is "change-me".
+# open: http://localhost:7700
+services:
+  meilisearch:
+    image: getmeili/meilisearch:latest
+    environment:
+      MEILI_MASTER_KEY: change-me
+      MEILI_ENV: development
+    ports: ["127.0.0.1:7700:7700"]
+    volumes: [meili:/meili_data]
+    restart: unless-stopped
+volumes:
+  meili:

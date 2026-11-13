@@ -2,7 +2,8 @@
 import os, sys
 from PyInstaller.utils.hooks import collect_submodules
 ROOT = os.path.abspath(os.path.join(SPECPATH, "..", ".."))
-datas = [(os.path.join(ROOT, "berth", "style.css"), "berth"), (os.path.join(ROOT, "data", "icons"), os.path.join("data", "icons"))]
+datas = [(os.path.join(ROOT, "berth", "style.css"), "berth"),
+         (os.path.join(ROOT, "berth", "templates"), os.path.join("berth", "templates")), (os.path.join(ROOT, "data", "icons"), os.path.join("data", "icons"))]
 a = Analysis([os.path.join(SPECPATH, "launcher.py")], pathex=[ROOT], datas=datas,
              hiddenimports=["berth.app"] + collect_submodules("berth"),     # also the ones imported lazily
              hooksconfig={"gi": {"module-versions": {"Gtk": "4.0", "Gdk": "4.0", "Gsk": "4.0", "Adw": "1"},

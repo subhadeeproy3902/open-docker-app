@@ -1,0 +1,21 @@
+# title: Redpanda (Kafka API) + Console
+# description: A single-node, Kafka-compatible broker and the Redpanda Console to see topics and messages.
+# open: http://localhost:8092
+services:
+  redpanda:
+    image: redpandadata/redpanda:latest
+    command: ["redpanda", "start", "--mode", "dev-container", "--smp", "1", "--memory", "512M",
+              "--kafka-addr", "internal://0.0.0.0:9092,external://0.0.0.0:19092",
+              "--advertise-kafka-addr", "internal://redpanda:9092,external://localhost:19092"]
+    ports: ["127.0.0.1:19092:19092"]
+    volumes: [redpanda:/var/lib/redpanda/data]
+    restart: unless-stopped
+  console:
+    image: redpandadata/console:latest
+    environment:
+      KAFKA_BROKERS: redpanda:9092
+    ports: ["127.0.0.1:8092:8080"]
+    depends_on: [redpanda]
+    restart: unless-stopped
+volumes:
+  redpanda:

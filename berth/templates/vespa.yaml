@@ -1,0 +1,11 @@
+# title: Vespa
+# description: A single Vespa node. Deploy an application package to port 19071, query on port 8080.
+# open: http://localhost:19071/state/v1/health
+services:
+  vespa:
+    image: vespaengine/vespa:latest
+    ports: ["127.0.0.1:8080:8080", "127.0.0.1:19071:19071"]
+    volumes: [vespa:/opt/vespa/var]
+    restart: unless-stopped
+volumes:
+  vespa:

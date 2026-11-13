@@ -1,0 +1,10 @@
+# title: Nginx static site
+# description: Serves the files in the site/ folder next to this compose.yaml (an example page is created).
+# open: http://localhost:8090
+# file site/index.html: <!doctype html><title>It works</title><h1>Served by nginx in Docker</h1><p>Put your files in the site/ folder.</p>
+services:
+  web:
+    image: nginx:alpine
+    ports: ["127.0.0.1:8090:80"]
+    volumes: ["./site:/usr/share/nginx/html:ro"]
+    restart: unless-stopped

@@ -24,6 +24,18 @@ and the project uses [Semantic Versioning](https://semver.org/).
   inline note, bars that follow the density setting.
 - **Short status text** (#9): `Up 2 d`, `Exited 137 · 3 h`, `Unhealthy · 4 min`; the full status and what the exit
   code means (137 = killed / out of memory, 143 = stopped, 139 = crashed …) in the tooltip; failed exits in amber.
+- **Registries page** (#34, under Build): browse Docker Hub namespaces and any Registry v2 registry (self-hosted, GHCR,
+  Quay, GitLab…): tags with digest, size, platforms and date, whether your copy matches, pull, copy a tag to another
+  registry, delete tags where the registry allows it. Uses docker's own credentials.
+- **Layer explorer** (#13): "Where does the size go?" bar and legend in the image details, each step's share of the
+  size, the biggest layers marked, metadata-only steps dimmed, BuildKit history shown as the Dockerfile step.
+- **Templates** (#31, Stacks → Templates…): 13 ready-made stacks (PostgreSQL + Adminer, MariaDB + Adminer, Redis,
+  MongoDB + Mongo Express, SeaweedFS S3, RabbitMQ, Redpanda + Console, OpenSearch + Dashboards, Vespa, Meilisearch,
+  Ollama + Open WebUI, Nginx, Traefik) as plain compose files in `berth/templates/`. The Compose dialog now shows
+  what a file creates (services, images, ports, volumes) next to the check, and offers to open the app afterwards.
+- **Dockerize a folder** (#31, Stacks): detects Node.js (npm / yarn / pnpm), Python (pip / uv, Flask / FastAPI /
+  Django), Go, Java (Maven / Gradle) and static sites, writes a Dockerfile, .dockerignore and compose.yaml to read and
+  edit before saving, then builds and runs it if you want.
 
 ### Changed
 - Flatpak builds on the GNOME 51 runtime (was 48). A Flathub-ready manifest that builds a pinned release tag is in

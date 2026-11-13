@@ -12,6 +12,10 @@ def _prefs():
         return {}
 
 
+if "--mcp" in sys.argv:                                  # MCP server for AI assistants (stdin / stdout), no window
+    from berth.mcp import main as mcp_main
+    sys.exit(mcp_main())
+
 if "--run-backups" in sys.argv:                          # scheduled backups, no window (systemd timer, cron, …)
     from berth.backups import cli
     sys.exit(cli())

@@ -22,6 +22,7 @@ from .send_page import SendPage  # noqa: E402
 from .backups_page import BackupsPage  # noqa: E402
 from .stacks_page import StacksPage  # noqa: E402
 from .registry_page import RegistryPage  # noqa: E402
+from .ai import AiPage  # noqa: E402
 from . import theme  # noqa: E402
 from .theme import apply_accessibility  # noqa: E402
 from .files import cleanup_helpers  # noqa: E402
@@ -35,7 +36,7 @@ from .util import ensure_tooltips, open_uri, APP_ID, VERSION, app_icon, themed, 
 HERE = os.path.dirname(os.path.abspath(__file__))
 PAGES = [("containers", ContainersPage), ("stacks", StacksPage), ("images", ImagesPage), ("volumes", VolumesPage), ("networks", NetworksPage),
          ("backups", BackupsPage),
-         ("databases", DatabasesPage), ("sharing", SharingPage), ("send", SendPage),
+         ("databases", DatabasesPage), ("sharing", SharingPage), ("send", SendPage), ("ai", AiPage),
          ("logs", LogsPage), ("resources", ResourcesPage), ("disk", DiskPage),
          ("builds", BuildHistoryPage), ("cache", BuildsPage), ("registries", RegistryPage),
          ("kubernetes", K8sPage),
@@ -470,6 +471,15 @@ class Window(Adw.ApplicationWindow):
                     self.notify(title, body, key=key)
             bg(self.alerts.check, st.engine, list(st.containers or []), dict(st.info or {}), s["alert_cpu"],
                s["alert_mem"], s["alert_disk"], done=shown, error=lambda e: self._watch_busy.discard("alerts"))
+        if s["ai_idle_stop"] and "ai" not in self._watch_busy:      # Local AI: stop Ollama after a while unused
+            from . import ai
+            if now - ai.last_use() > s["ai_idle_stop"] * 60 and any(
+                    f"/{ai.NAME}" in (c.get("Names") or []) and c.get("State") == "running" for c in st.containers):
+                self._watch_busy.add("ai")
+                bg(ai.stop, st.engine, done=lambda _r: (self._watch_busy.discard("ai"),
+                                                       self.notify("Local AI stopped", "Ollama wasn't used for a while; "
+                                                                   "Local AI → Start brings it back.", key="ai-idle")),
+                   error=lambda e: self._watch_busy.discard("ai"))
         if watch.scan_due(s["scan_schedule"], s["scan_last"]) and st.images and "scan" not in self._watch_busy:
             self._watch_busy.add("scan")
             s["scan_last"] = now
@@ -756,6 +766,12 @@ class App(Adw.Application):
                 from .sharing import stop_unpinned
                 stop_unpinned(self.win.store.engine)
             except Exception:  # noqa: BLE001 — never block quitting
+                pass
+            try:                                         # clients of outside databases (db_external.py)
+                eng = self.win.store.engine
+                for c in eng.containers_filtered({"label": ["io.github.subhadeeproy3902.berth.helper=db-client"]}):
+                    eng.remove_container(c["Id"], force=True)
+            except Exception:  # noqa: BLE001
                 pass
         Adw.Application.do_shutdown(self)
 

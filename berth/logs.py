@@ -1,11 +1,15 @@
 """Logs explorer, Grafana/Loki style: a log-volume histogram coloured by level (drag to zoom),
 time ranges or live tail, level filters with counts, regex search, and several containers at once."""
 import calendar
+import collections
+import csv
+import functools
+import json
 import re
 import threading
 import time
 
-from gi.repository import Adw, Gdk, GLib, Gtk, Pango
+from gi.repository import Adw, Gdk, Gio, GLib, Gtk, Pango
 
 from . import charts
 from .engine import demux
@@ -56,6 +60,51 @@ def split_lines(raw, tty, carry=None):
         *done, pend[s] = pend[s].split(b"\n")
         out += [(s, ln.decode(errors="replace").rstrip("\r")) for ln in done]
     return out, (buf, pend)
+
+
+_KV = re.compile(r'(?<![\w.-])([A-Za-z_][\w.-]*)=("(?:[^"\\]|\\.)*"|[^\s"]+)')
+_CONT = re.compile(r"^(\s+\S|at \S|Caused by:|\.\.\. \d+ (more|common frames)|\s*\^)")
+_LEVEL_RANK = {lv: i for i, lv in enumerate(("debug", "info", "warn", "error"))}
+
+
+@functools.lru_cache(maxsize=30000)
+def fields(text):
+    """Structured fields of a log line (#29): a JSON object's top-level values, or logfmt key=value pairs.
+    A tuple of (name, value), so it can be cached."""
+    t = text.strip()
+    if t.startswith("{") and t.endswith("}"):
+        try:
+            d = json.loads(t)
+        except ValueError:
+            d = None
+        if isinstance(d, dict):
+            return tuple((k, v if isinstance(v, str) else json.dumps(v)) for k, v in d.items()
+                         if not isinstance(v, (dict, list)))[:40]
+    return tuple((k, v[1:-1] if v.startswith('"') else v) for k, v in _KV.findall(t))[:40]
+
+
+def group_multiline(ents, last=None):
+    """Fold stack-trace continuation lines (indented, "at …", "Caused by:") into the line before them from the same
+    container, so a Python / Java / Node trace is one entry. last: {source: entry} carried over from earlier batches;
+    returns (entries, last, changed) where changed lists earlier entries that got more lines."""
+    last = dict(last or {})
+    out, changed, here = [], [], {}          # here: source → index in out of its latest line from this batch
+    for e in ents:
+        p = last.get(e[1])
+        if p is not None and _CONT.match(e[3]) and e[0] - p[0] < 2 and p[3].count("\n") < 200:
+            lv = max(p[2], e[2], key=_LEVEL_RANK.get)
+            merged = (p[0], p[1], lv, p[3] + "\n" + e[3])
+            if e[1] in here:
+                out[here[e[1]]] = merged
+            else:                              # continues a line from an earlier batch
+                orig = next((o for o, _n in changed if _n is p), p)
+                changed = [(o, n) for o, n in changed if n is not p] + [(orig, merged)]
+            last[e[1]] = merged
+            continue
+        here[e[1]] = len(out)
+        out.append(e)
+        last[e[1]] = e
+    return out, last, changed
 
 
 def entry(src, line):
@@ -238,13 +287,43 @@ class LogsExplorer(Gtk.Box):
         self.reset.add_css_class("flat")
         self.reset.connect("clicked", lambda *_: self._set_zoom(None))
         bar2.append(self.reset)
+        # structured fields (#29): a popover with each field's top values; a click filters on it
+        self.ffilters, self._last = {}, {}
+        self.fields_btn = Gtk.MenuButton(label="Fields", tooltip_text="Filter by a field of JSON or key=value lines")
+        self.fields_pop = Gtk.Popover()
+        self.fields_pop.connect("show", lambda *_: self._fill_fields())
+        self.fields_btn.set_popover(self.fields_pop)
+        bar2.append(self.fields_btn)
+        self.fchips = Gtk.Box(spacing=4)
+        bar2.append(self.fchips)
+        self.saved_btn = Gtk.MenuButton(icon_name="starred-symbolic", tooltip_text="Saved filters for these containers")
+        self.saved_pop = Gtk.Popover()
+        self.saved_pop.connect("show", lambda *_: self._fill_saved())
+        self.saved_btn.set_popover(self.saved_pop)
+        self.paused = Gtk.ToggleButton(icon_name="media-playback-pause-symbolic", tooltip_text="Pause the live view")
+        self.paused.connect("toggled", lambda b: (b.set_icon_name("media-playback-start-symbolic" if b.get_active()
+                                                                  else "media-playback-pause-symbolic"),
+                                                  b.set_tooltip_text("Resume the live view" if b.get_active()
+                                                                     else "Pause the live view"),
+                                                  None if b.get_active() else self.render()))
+        exp = Gio.Menu()
+        for fmt, lbl in (("txt", "Text"), ("json", "JSON lines"), ("csv", "CSV")):
+            exp.append(f"Export as {lbl}…", f"logx.export::{fmt}")
+        self.export_btn = Gtk.MenuButton(icon_name="document-save-symbolic", menu_model=exp,
+                                         tooltip_text="Export the lines shown (with their fields)")
+        ag = Gio.SimpleActionGroup()
+        a = Gio.SimpleAction.new("export", GLib.VariantType.new("s"))
+        a.connect("activate", lambda _a, v: self._export(v.get_string()))
+        ag.add_action(a)
+        self.insert_action_group("logx", ag)
         self.ts = Gtk.ToggleButton(icon_name="preferences-system-time-symbolic", active=True, tooltip_text="Timestamps")
         self.ts.connect("toggled", lambda *_: self.render())
         self.wrap = Gtk.ToggleButton(icon_name="format-justify-left-symbolic", tooltip_text="Wrap lines")
         self.wrap.connect("toggled", lambda b: self.text.set_wrap_mode(Gtk.WrapMode.CHAR if b.get_active() else Gtk.WrapMode.NONE))
         self.follow = Gtk.ToggleButton(icon_name="go-bottom-symbolic", active=True, tooltip_text="Keep scrolled to the newest line")
         self.follow.connect("toggled", lambda b: b.get_active() and GLib.idle_add(self._to_end))
-        for w in (self.ts, self.wrap, self.follow, icon_button("edit-copy-symbolic", "Copy shown lines", self._copy, css=()),
+        for w in (self.saved_btn, self.paused, self.ts, self.wrap, self.follow, self.export_btn,
+                  icon_button("edit-copy-symbolic", "Copy shown lines", self._copy, css=()),
                   icon_button("view-refresh-symbolic", "Reload", self.reload, css=())):
             bar2.append(w)
         self.append(bar2)
@@ -298,7 +377,7 @@ class LogsExplorer(Gtk.Box):
         self._stop()
         self.gen += 1
         gen = self.gen
-        self.entries, self.zoom = [], None
+        self.entries, self.zoom, self._last = [], None, {}
         self.names = [s[1] for s in srcs]
         self._make_src_tags()
         self.reset.set_visible(False)
@@ -332,6 +411,7 @@ class LogsExplorer(Gtk.Box):
                     out += [entry(i, ln) for _s, ln in lines]
                 st.close()
             out.sort(key=lambda e: e[0])
+            out, self._last, _c = group_multiline(out)
             return out
 
         def done(res):
@@ -397,7 +477,15 @@ class LogsExplorer(Gtk.Box):
             return True
         self._idle_ticks = 0
         q.sort(key=lambda e: e[0])
+        q, self._last, changed = group_multiline(q, self._last)
+        if changed:                      # a trace continued from an earlier batch: swap in the longer entry
+            idx = {id(old): new for old, new in changed}
+            self.entries = [idx.get(id(e), e) for e in self.entries]
         self.entries += q
+        if self.paused.get_active():
+            self.paused.set_tooltip_text(f"Resume the live view ({len(q)} new lines waiting…)")
+            self._counts()
+            return True
         cut = time.time() - 3600
         if len(self.entries) > 60000:
             self.entries = [e for e in self.entries if e[0] >= cut][-60000:]
@@ -428,7 +516,13 @@ class LogsExplorer(Gtk.Box):
         if z and not (z[0] <= e[0] <= z[1]):
             return False
         m = m if m is not None else self._matcher()
-        return not m or bool(m.search(e[3]))
+        return (not m or bool(m.search(e[3]))) and self._fields_ok(e)
+
+    def _fields_ok(self, e):
+        if not self.ffilters:
+            return True
+        f = dict(fields(e[3]))
+        return all(f.get(k) == v for k, v in self.ffilters.items())
 
     def _window(self):
         live, secs = self._range()
@@ -438,7 +532,8 @@ class LogsExplorer(Gtk.Box):
     def _histo(self):
         t0, t1 = self.zoom or self._window()
         m = self._matcher()
-        ents = [e for e in self.entries if not m or m.search(e[3])] if m else self.entries
+        ents = [e for e in self.entries if (not m or m.search(e[3])) and self._fields_ok(e)] \
+            if (m or self.ffilters) else self.entries
         self.hist.set_data(ents, t0, t1)
 
     def _counts(self):
@@ -446,7 +541,7 @@ class LogsExplorer(Gtk.Box):
         m = self._matcher()
         c = dict.fromkeys(LEVELS, 0)
         for e in self.entries:
-            if t0 <= e[0] <= t1 and (not m or m.search(e[3])):
+            if t0 <= e[0] <= t1 and (not m or m.search(e[3])) and self._fields_ok(e):
                 c[e[2]] += 1
         for lv, b in self.chips.items():
             b.lb.set_markup(f"<span foreground='{COL[lv]}'>●</span> {lv.capitalize()}  <b>{_short(c[lv])}</b>")
@@ -533,6 +628,152 @@ class LogsExplorer(Gtk.Box):
     def _copy(self):
         self.get_clipboard().set(self.buf.get_text(self.buf.get_start_iter(), self.buf.get_end_iter(), False))
         self.win.toast("Copied the shown lines")
+
+    # ── fields (#29) ──
+    def _fill_fields(self):
+        t0, t1 = self.zoom or self._window()
+        stats = collections.defaultdict(collections.Counter)
+        n = 0
+        for e in reversed(self.entries):
+            if not (t0 <= e[0] <= t1):
+                continue
+            for k, v in fields(e[3]):
+                stats[k][v] += 1
+            n += 1
+            if n >= 20000:
+                break
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_start=10, margin_end=10, margin_top=10,
+                      margin_bottom=10)
+        if not stats:
+            box.append(label("No JSON or key=value fields in these lines.", css=["dim-label"]))
+        keys = sorted(stats, key=lambda k: -sum(stats[k].values()))[:14]
+        for k in keys:
+            row = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=4)
+            row.append(label(f"{k}  ·  {sum(stats[k].values()):,} lines", css=["heading", "monospace"]))
+            vals = Adw.WrapBox(child_spacing=4, line_spacing=4)
+            for v, c in stats[k].most_common(6):
+                b = Gtk.Button(label=f"{v[:30]}  {_short(c)}", tooltip_text=f"Show only {k}={v}")
+                b.add_css_class("monospace")
+                b.connect("clicked", lambda *_a, k=k, v=v: (self.fields_pop.popdown(), self.add_field(k, v)))
+                vals.append(b)
+            row.append(vals)
+            box.append(row)
+        self.fields_pop.set_child(Gtk.ScrolledWindow(child=box, propagate_natural_height=True, max_content_height=480,
+                                                     propagate_natural_width=True, max_content_width=520))
+
+    def add_field(self, k, v):
+        self.ffilters[k] = v
+        self._chips()
+        self.render()
+
+    def _chips(self):
+        while (c := self.fchips.get_first_child()) is not None:
+            self.fchips.remove(c)
+        for k, v in self.ffilters.items():
+            b = Gtk.Button(tooltip_text="Remove this filter")
+            b.set_child(label(f"{k}={v}  ✕", css=["monospace", "caption"]))
+            b.add_css_class("pill")
+            b.connect("clicked", lambda *_a, k=k: (self.ffilters.pop(k, None), self._chips(), self.render()))
+            self.fchips.append(b)
+
+    # ── saved filters per stack / container (#29) ──
+    def _scope(self):
+        return ",".join(sorted(self.names)) or "all"
+
+    def _query(self):
+        return {"q": self.search.get_text(), "re": self.regex.get_active(), "fields": dict(self.ffilters),
+                "levels": [lv for lv, b in self.chips.items() if b.get_active()]}
+
+    def _apply(self, q):
+        self.ffilters = dict(q.get("fields") or {})
+        self._chips()
+        self.regex.set_active(bool(q.get("re")))
+        for lv, b in self.chips.items():
+            b.set_active(lv in (q.get("levels") or LEVELS))
+        self.search.set_text(q.get("q", ""))
+        self.render()
+
+    def _fill_saved(self):
+        st = self.win.settings
+        saved = (st["log_queries"] or {}).get(self._scope(), [])
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_start=10, margin_end=10, margin_top=10,
+                      margin_bottom=10)
+        for i, q in enumerate(saved):
+            row = Gtk.Box(spacing=4)
+            b = Gtk.Button(label=q["name"], hexpand=True, tooltip_text=json.dumps({k: v for k, v in q.items()
+                                                                                   if k != "name"}))
+            b.connect("clicked", lambda *_a, q=q: (self.saved_pop.popdown(), self._apply(q)))
+            row.append(b)
+            x = icon_button("user-trash-symbolic", "Forget this filter", lambda i=i: self._forget(i), css=("flat",))
+            row.append(x)
+            box.append(row)
+        if not saved:
+            box.append(label("No saved filters for these containers yet.", css=["dim-label", "caption"]))
+        e = Gtk.Entry(placeholder_text="Name for the current filter")
+        save = Gtk.Button(label="Save")
+        save.add_css_class("suggested-action")
+        go = lambda *_: e.get_text().strip() and (self._save_query(e.get_text().strip()), self.saved_pop.popdown())
+        save.connect("clicked", go)
+        e.connect("activate", go)
+        row = Gtk.Box(spacing=4)
+        row.append(e)
+        row.append(save)
+        box.append(row)
+        self.saved_pop.set_child(box)
+
+    def _save_query(self, name):
+        st = self.win.settings
+        allq = dict(st["log_queries"] or {})
+        lst = [q for q in allq.get(self._scope(), []) if q["name"] != name]
+        allq[self._scope()] = lst + [{"name": name, **self._query()}]
+        st["log_queries"] = allq
+        self.win.toast(f"Saved “{name}”")
+
+    def _forget(self, i):
+        st = self.win.settings
+        allq = dict(st["log_queries"] or {})
+        lst = list(allq.get(self._scope(), []))
+        if 0 <= i < len(lst):
+            lst.pop(i)
+        allq[self._scope()] = lst
+        st["log_queries"] = allq
+        self._fill_saved()
+
+    # ── export (#29) ──
+    def _shown(self):
+        m, z = self._matcher(), self.zoom
+        return [e for e in self.entries if self._keep(e, m, z)]
+
+    def _export(self, fmt):
+        from .pages import save_dialog
+        rows = self._shown()
+        if not rows:
+            return self.win.toast("No lines to export")
+
+        def go(path):
+            try:
+                with open(path, "w", newline="") as f:
+                    iso = lambda t: time.strftime("%Y-%m-%dT%H:%M:%S", time.localtime(t)) + f".{int(t % 1 * 1000):03d}"
+                    if fmt == "txt":
+                        for t, src, lv, text in rows:
+                            f.write(f"{iso(t)} {self.names[src] if src < len(self.names) else ''} {text}\n")
+                    elif fmt == "json":
+                        for t, src, lv, text in rows:
+                            f.write(json.dumps({"time": iso(t), "container": self.names[src] if src < len(self.names)
+                                                else "", "level": lv, "message": text, "fields": dict(fields(text))})
+                                    + "\n")
+                    else:
+                        keys = sorted({k for e in rows for k, _v in fields(e[3])})[:30]
+                        w = csv.writer(f)
+                        w.writerow(["time", "container", "level", "message"] + keys)
+                        for t, src, lv, text in rows:
+                            fd = dict(fields(text))
+                            w.writerow([iso(t), self.names[src] if src < len(self.names) else "", lv, text] +
+                                       [fd.get(k, "") for k in keys])
+                self.win.toast(f"Exported {len(rows):,} lines to {path}")
+            except OSError as e:
+                self.win.toast(f"Couldn't export: {e}")
+        save_dialog(self.win, "Export logs", f"logs.{fmt if fmt != 'json' else 'jsonl'}", go)
 
     def _soon(self, fn):
         if self._soon_id:

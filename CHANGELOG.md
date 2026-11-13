@@ -46,6 +46,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
   a reachability check — "can web reach api on port 8000?" — run from inside the container's network.
 - The demo stack (tools/demo) now has two networks, depends_on with a health condition, environment variables with
   secrets, an env_file and an api that listens on port 8000.
+- **Structured logs** (#29): JSON and key=value lines become fields — the **Fields** button lists each field's top
+  values, a click filters on it (`route=/cart`), several filters combine; **saved filters** per stack or container;
+  **pause / resume** the live view; **export** what is shown as text, JSON lines or CSV (with the fields as columns);
+  Python / Java / Node stack traces are grouped into one entry.
+- **App metrics** (#30): a **Metrics** tab on every container finds its Prometheus endpoint (labels, exposed and
+  listening ports, /metrics or /actuator/prometheus), scrapes it every 5 s while the tab is open, and charts it —
+  counters as a rate per second. Starter charts for node, Postgres, Redis, nginx, Node.js, Python, Go and Java
+  exporters; any other series can be added.
 
 ### Changed
 - Flatpak builds on the GNOME 51 runtime (was 48). A Flathub-ready manifest that builds a pinned release tag is in

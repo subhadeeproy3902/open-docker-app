@@ -63,7 +63,7 @@ all of them).
 - [ ] **P2** Activity timeline per container (created, started, died, OOM, health changes)
 - [ ] **P2** Health check history, and defining a health check
 - [ ] **P2** Exec: several terminal tabs, choose the shell and user
-- [ ] **P2** Download / save logs; follow several containers side by side
+- [x] **P2** Download / save logs (text, JSON, CSV); follow several containers side by side (split view)
 - [ ] **P2** What changed in the container's filesystem (`docker diff`)
 - [ ] **P3** Drag and drop files into the Files tab
 

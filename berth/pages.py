@@ -948,7 +948,8 @@ class RunDialog(Adw.Dialog):
         pp.add(more)
         tv.set_content(pp)
         self.set_child(tv)
-        bg(store.engine.image_inspect, image["id"], done=self._prefill, error=lambda e: None)
+        if image.get("id"):
+            bg(store.engine.image_inspect, image["id"], done=self._prefill, error=lambda e: None)
 
     def _prefill(self, ins):
         exposed = list(((ins or {}).get("Config") or {}).get("ExposedPorts") or {})

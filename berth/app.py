@@ -627,7 +627,7 @@ class App(Adw.Application):
             GLib.timeout_add_seconds(int(os.environ.get("BERTH_SHOT_DELAY", "6")),
                                      lambda: GLib.timeout_add(50, take) and False)
 
-    def _self_test(self):
+    def _self_test(self):  # noqa: C901
         """`berth --self-test` (CI on Windows, macOS, Linux): open every page and the main dialogs, close them, and
         quit with exit code 1 if anything raised. Works without a Docker engine."""
         import sys as _sys
@@ -657,8 +657,8 @@ class App(Adw.Application):
             from .backups_page import ScheduleDialog
             from .onboarding import Onboarding
             return [lambda: Palette(w), lambda: PullDialog(w, w.store),
-                    lambda: RunDialog(w, w.store, {"ref": "busybox:latest", "repo": "busybox", "tag": "latest",
-                                                   "id": "sha256:0"}),
+                    lambda: RunDialog(w, w.store, _sample_image(w.store) or
+                                      {"ref": "busybox:latest", "repo": "busybox", "tag": "latest", "id": None}),
                     lambda: BuildDialog(w, w.store), lambda: ComposeOpen(w, w.store),
                     lambda: ScheduleDialog(w.pages["backups"]), lambda: Onboarding(w)]
 
@@ -738,6 +738,17 @@ class App(Adw.Application):
             "<tt>Ctrl+,</tt>  Settings\n<tt>Ctrl+Q</tt>  Quit")
         d.add_response("ok", "Close")
         d.present(self.win)
+
+
+def _sample_image(store):
+    """An image for the self-test's Run dialog: a real one, or None when the engine has none (then the dialog opens
+    with a placeholder that is never sent to an engine)."""
+    for im in store.images or []:
+        tags = [t for t in im.get("RepoTags") or [] if t != "<none>:<none>"]
+        if tags:
+            repo, _, tag = tags[0].rpartition(":")
+            return {"ref": tags[0], "repo": repo, "tag": tag, "id": im["Id"]}
+    return None
 
 
 def main(argv=None):

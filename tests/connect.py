@@ -103,11 +103,20 @@ def cleanup():
             eng.remove_volume(sharing.PROXY_DATA)
         except Exception:
             pass
+    test_ids = {c["Id"] for c in eng.containers_filtered({"label": ["io.berth.test=1"]})}
     for c in eng.containers_filtered({"label": ["io.berth.test=1"]}):
         try:
             eng.remove_container(c["Id"], force=True)
         except Exception:
             pass
+    # HTTP helpers Berth started inside the test containers' networks (search engines without curl)
+    for c in eng.containers_filtered({"label": ["io.github.subhadeeproy3902.berth.helper=http"]}) or []:
+        mode = ((eng.inspect(c["Id"]).get("HostConfig") or {}).get("NetworkMode") or "")
+        if mode.split(":", 1)[-1] in test_ids or not mode.startswith("container:"):
+            try:
+                eng.remove_container(c["Id"], force=True)
+            except Exception:
+                pass
     for c in sharing.tunnels(eng.containers_filtered({"label": [f"{sharing.ROLE}=tunnel"]})):
         if (c.get("Labels") or {}).get(sharing.TARGET, "").startswith("berth-test-"):
             eng.remove_container(c["Id"], force=True)
@@ -158,6 +167,14 @@ def _ed(b, node):
     r = b.browse(node, 0, 200)
     ed.annotate(node, r)
     return ed, r
+
+
+def _doc(ed, node, ident):
+    """A document as the panel shows it (one field per key) turned back into a dict."""
+    out = {}
+    for f in ed.fetch(node, ident):
+        out[f.name] = f.value if f.type == "text" or f.value is None else json.loads(f.value)
+    return out
 
 
 def _vals(ed, node, ident):
@@ -432,15 +449,17 @@ def t_mongo():
           r.edit_why)
     pos = [row[r.columns.index("item")] for row in r.rows].index("a")
     ident = ed.ident(node, r, pos)
-    doc = json.loads(_vals(ed, node, ident)["document"].value)
-    check("edit mongo: a document opens as JSON", doc.get("item") == "a" and "$oid" in json.dumps(doc["_id"]), doc)
-    doc["qty"] = 42
-    doc["note"] = "it's \"fine\"\n$where"
-    ed.save(node, ident, {"document": json.dumps(doc)}, True)
-    d2 = json.loads(_vals(ed, node, ident)["document"].value)
-    check("edit mongo: replace the document", d2["qty"] == 42 and d2["note"] == doc["note"], d2)
-    ok, msg = raises(ed.save, node, ident, {"document": "{not json"}, True, contains="json")
-    check("edit mongo: invalid JSON is refused before sending", ok, msg)
+    fields = {f.name: f for f in ed.fetch(node, ident)}
+    doc = _doc(ed, node, ident)
+    check("edit mongo: a document opens field by field", doc.get("item") == "a" and "$oid" in json.dumps(doc["_id"])
+          and fields["_id"].readonly and fields["qty"].type == "number", list(fields))
+    note = "it's \"fine\"\n$where"
+    ed.save(node, ident, {"qty": "42", "note": note}, True)
+    d2 = _doc(ed, node, ident)
+    check("edit mongo: save edited fields (a number stays a number, text stays text)", d2["qty"] == 42 and
+          d2["note"] == note and d2["item"] == "a", d2)
+    ok, msg = raises(ed.save, node, ident, {"qty": "{not json"}, True, contains="valid")
+    check("edit mongo: an invalid value is refused before sending", ok, msg)
     ed.save(node, None, {"document": '{"item": "z", "big": "' + "w" * 200_000 + '"}'}, True)
     check("edit mongo: insert (a 200 KB document goes through a file)", len(b.browse(node).rows) == 4)
     ed.delete(node, ident, True)
@@ -473,10 +492,11 @@ def t_opensearch():
     ed, r = _ed(b, node)
     check("edit opensearch: documents are picked out by _id", r.edit_why is None, r.edit_why)
     ident = ed.ident(node, r, 0)
-    doc = json.loads(_vals(ed, node, ident)["document"].value)
-    doc["edited"] = "yes"
-    ed.save(node, ident, {"document": json.dumps(doc)}, True)
-    check("edit opensearch: save a document", json.loads(_vals(ed, node, ident)["document"].value).get("edited") == "yes")
+    before = _doc(ed, node, ident)
+    ed.save(node, ident, {"edited": "yes"}, True)
+    after = _doc(ed, node, ident)
+    check("edit opensearch: save a field, the others stay", after.get("edited") == "yes" and
+          all(after.get(x) == v for x, v in before.items()), after)
     ed.save(node, None, {"document": json.dumps({"name": "new", "price": 5})}, True)
     ed.delete(node, ident, True)
     time.sleep(1)
@@ -498,10 +518,11 @@ def t_typesense():
     ed, r = _ed(b, node)
     check("edit typesense: documents are picked out by id", r.edit_why is None, r.edit_why)
     ident = ed.ident(node, r, 0)
-    doc = json.loads(_vals(ed, node, ident)["document"].value)
-    doc["edited"] = "yes"
-    ed.save(node, ident, {"document": json.dumps(doc)}, True)
-    check("edit typesense: save a document", json.loads(_vals(ed, node, ident)["document"].value).get("edited") == "yes")
+    before = _doc(ed, node, ident)
+    ed.save(node, ident, {"edited": "yes"}, True)
+    after = _doc(ed, node, ident)
+    check("edit typesense: save a field, the others stay", after.get("edited") == "yes" and
+          all(after.get(x) == v for x, v in before.items()), after)
     ed.save(node, None, {"document": json.dumps({"id": "9", "title": "New", "year": 2024})}, True)
     ed.delete(node, ident, True)
     time.sleep(1)
@@ -521,10 +542,11 @@ def t_meili():
     ed, r = _ed(b, node)
     check("edit meilisearch: documents are picked out by id", r.edit_why is None, r.edit_why)
     ident = ed.ident(node, r, 0)
-    doc = json.loads(_vals(ed, node, ident)["document"].value)
-    doc["edited"] = "yes"
-    ed.save(node, ident, {"document": json.dumps(doc)}, True)
-    check("edit meilisearch: save a document", json.loads(_vals(ed, node, ident)["document"].value).get("edited") == "yes")
+    before = _doc(ed, node, ident)
+    ed.save(node, ident, {"edited": "yes"}, True)
+    after = _doc(ed, node, ident)
+    check("edit meilisearch: save a field, the others stay", after.get("edited") == "yes" and
+          all(after.get(x) == v for x, v in before.items()), after)
     ed.save(node, None, {"document": json.dumps({"id": 9, "title": "New"})}, True)
     ed.delete(node, ident, True)
     time.sleep(1)

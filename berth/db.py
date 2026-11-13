@@ -1176,7 +1176,7 @@ class Http:
         from .sharing import ensure_image
         image = "curlimages/curl:8.11.1"
         ensure_image(eng, image)
-        r = eng.create_container(None, {"Image": image, "Entrypoint": ["sleep", "3600"],
+        r = eng.create_container(None, {"Image": image, "Entrypoint": ["sleep", "600"],     # gone by itself if Berth goes away
                                         "Labels": {"io.github.subhadeeproy3902.berth.helper": "http"},
                                         "HostConfig": {"NetworkMode": f"container:{self.b.cid}", "AutoRemove": True}})
         eng.action(r["Id"], "start")

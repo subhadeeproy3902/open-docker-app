@@ -194,11 +194,48 @@ class Client:
         return [r for r in repos if r.startswith(namespace)] if namespace else repos
 
     def tags(self, repo):
+        if self.hub:
+            return self._hub_tags(repo)
         _h, d = self.req("GET", f"/v2/{repo}/tags/list?n=1000", scope=f"repository:{repo}:pull")
         return sorted(d.get("tags") or [])
 
+    def _hub_tags(self, repo):
+        """Docker Hub: tags with digest, size, date and platforms from Hub's API — one request per 100 tags, and it
+        doesn't count against the pull rate limit (reading each manifest from the registry would)."""
+        ns, _, name = repo.partition("/")
+        url = (f"https://hub.docker.com/v2/namespaces/{urllib.parse.quote(ns)}/repositories/"
+               f"{urllib.parse.quote(name)}/tags?page_size=100")
+        self.hub_info = getattr(self, "hub_info", {})
+        info, order = {}, []
+        while url and len(order) < 500:
+            r = urllib.request.Request(url, headers=dict(UA))
+            tok = self._hub_jwt()
+            if tok:
+                r.add_header("Authorization", "Bearer " + tok)
+            try:
+                with urllib.request.urlopen(r, timeout=20) as f:
+                    d = json.load(f)
+            except urllib.error.HTTPError as e:
+                if order and e.code in (401, 403):            # only the first page without signing in
+                    break
+                raise RegistryError(f"Docker Hub: {e.code} {e.reason}" +
+                                    (" — no such repository" if e.code == 404 else "")) from None
+            for t in d.get("results") or []:
+                plats = [f"{i.get('os')}/{i.get('architecture')}" + (f"/{i['variant']}" if i.get("variant") else "")
+                         for i in t.get("images") or [] if i.get("os") not in (None, "unknown")]
+                info[t["name"]] = {"digest": t.get("digest") or "", "size": t.get("full_size") or 0,
+                                   "platforms": plats, "config": "",
+                                   "created": (t.get("last_updated") or "")[:19].replace("T", " ")}
+                order.append(t["name"])
+            url = d.get("next")
+        self.hub_info[repo] = info
+        return order                                         # newest first, as Hub lists them
+
     def info(self, repo, tag):
         """{digest, platforms, size, created} of one tag."""
+        cached = getattr(self, "hub_info", {}).get(repo, {}).get(tag)
+        if cached is not None:
+            return cached
         scope = f"repository:{repo}:pull"
         h, m = self.req("GET", f"/v2/{repo}/manifests/{tag}", scope=scope, accept=ACCEPT)
         digest = h.get("Docker-Content-Digest", "")

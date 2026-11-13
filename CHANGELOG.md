@@ -69,6 +69,11 @@ and the project uses [Semantic Versioning](https://semver.org/).
   details and list images. Starting, stopping and restarting needs a switch in Settings; "Copy config" gives the
   snippet for the assistant.
 - Berth removes the client containers of outside databases when it quits.
+- Registries: Docker Hub tags come from Hub's own API (one request per 100 tags) — reading each tag's manifest would
+  count against Docker Hub's pull rate limit.
+- Local AI: the idle stop no longer stops Ollama at once when Berth has no record of its last use.
+- README: new and refreshed screenshots (split view, dependency graph, network map, registries, local AI, images,
+  stacks, settings, container details) and the 1.4 features.
 
 ### Changed
 - Flatpak builds on the GNOME 51 runtime (was 48). A Flathub-ready manifest that builds a pinned release tag is in

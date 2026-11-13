@@ -1,0 +1,21 @@
+pkgbase = berth
+	pkgdesc = A light, native Docker desktop for Linux — containers, images, volumes, logs and live stats
+	pkgver = 1.3.0
+	pkgrel = 1
+	url = https://github.com/subhadeeproy3902/open-docker-app
+	arch = any
+	license = MIT
+	depends = python
+	depends = python-gobject
+	depends = python-cairo
+	depends = gtk4
+	depends = libadwaita>=1.7
+	optdepends = docker: the Docker Engine (or podman)
+	optdepends = vte4: built-in terminal in the Exec tab
+	optdepends = polkit: start/stop the engine and edit daemon.json from the app
+	optdepends = kubectl: Kubernetes view
+	optdepends = kind: create local Kubernetes clusters
+	source = berth-1.3.0.tar.gz::https://github.com/subhadeeproy3902/open-docker-app/releases/download/v1.3.0/berth-linux.tar.gz
+	sha256sums = eb87fb37573ce064b63536c3c3a313b3300850e9b11f2b72a2513c0f6aa9536d
+
+pkgname = berth

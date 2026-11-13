@@ -2,7 +2,7 @@
 #   flatpak-builder --user --install --force-clean build-dir packaging/flatpak/io.github.subhadeeproy3902.Berth.yml
 id: io.github.subhadeeproy3902.Berth
 runtime: org.gnome.Platform
-runtime-version: '48'
+runtime-version: '51'
 sdk: org.gnome.Sdk
 command: berth
 finish-args:

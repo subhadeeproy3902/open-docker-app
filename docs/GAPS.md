@@ -73,7 +73,9 @@ all of them).
 - [x] **P1** "Update available" for images and the containers that use them; update and recreate in one click
 - [ ] **P2** Browse a private registry's repositories and tags; delete remote tags
 - [ ] **P2** Layer and file size breakdown (what makes an image big)
-- [ ] **P3** Scheduled vulnerability scans and scan history
+- [x] **P2** Safe updates: scan the new version first, keep the current one if it adds critical / high vulnerabilities
+- [x] **P3** Scan history (last 10 scans per image, compared in the scan window)
+- [x] **P3** Scheduled vulnerability scans (daily / weekly, images in use) and a Security column
 
 ## Volumes, networks
 
@@ -98,7 +100,7 @@ all of them).
 
 ## Watching and alerts
 
-- [ ] **P2** Alerts on CPU / memory / disk thresholds (container failures and backup failures notify already)
+- [x] **P2** Alerts on CPU / memory / disk thresholds (container failures and backup failures notify already)
 - [ ] **P2** Keep metrics history while Berth is closed (today: only while a page is open, by design)
 - [ ] **P2** An activity log of what Berth did (started, recreated, deleted, shared)
 

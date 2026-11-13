@@ -102,6 +102,32 @@ class SettingsPage(Gtk.Box):
         if not os.environ.get("FLATPAK_ID"):          # Flathub updates the Flatpak
             gn.add(upd)
         pp.add(gn)
+        gi = Adw.PreferencesGroup(title="Image updates")
+        safe = Adw.SwitchRow(title="Safe updates",
+                             subtitle="Scan each new image version with Trivy before using it, and keep the current "
+                                      "version if the new one adds critical or high vulnerabilities. The first scan "
+                                      "downloads Trivy (about 270 MB).", active=bool(settings["safe_update"]))
+        safe.connect("notify::active", lambda r, *_: settings.__setitem__("safe_update", r.get_active()))
+        gi.add(safe)
+
+        def choice(group, title, sub, key, labels, values):
+            row = Adw.ComboRow(title=title, subtitle=sub, model=Gtk.StringList.new(labels))
+            row.set_selected(values.index(settings[key]) if settings[key] in values else 0)
+            row.connect("notify::selected", lambda r, *_: settings.__setitem__(key, values[r.get_selected()]))
+            group.add(row)
+        choice(gi, "Scan the images in use", "Scan every image a container uses and tell me what Trivy finds",
+               "scan_schedule", ["Never", "Every day", "Every week"], ["off", "daily", "weekly"])
+        pp.add(gi)
+        ga2 = Adw.PreferencesGroup(title="Alerts", description="A desktop notification when a container stays busy, "
+                                   "nears its memory limit, or Docker's disk fills up. Checked once a minute, only "
+                                   "while an alert is on.")
+        choice(ga2, "CPU", "A container above this for 5 minutes (100 % = one core)", "alert_cpu",
+               ["Off", "50 %", "80 %", "100 %", "200 %"], [0, 50, 80, 100, 200])
+        choice(ga2, "Memory", "A container above this share of its limit (or of this computer's memory)",
+               "alert_mem", ["Off", "75 %", "90 %", "95 %"], [0, 75, 90, 95])
+        choice(ga2, "Docker disk", "Free space left where Docker keeps its data", "alert_disk",
+               ["Off", "Below 20 %", "Below 10 %", "Below 5 %"], [0, 20, 10, 5])
+        pp.add(ga2)
 
         self.eng = Adw.PreferencesGroup(title="Docker Engine")
         self.endpoints = []

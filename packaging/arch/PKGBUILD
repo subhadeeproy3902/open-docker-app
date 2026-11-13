@@ -13,7 +13,7 @@ optdepends=('docker: the Docker Engine (or podman)'
             'kubectl: Kubernetes view'
             'kind: create local Kubernetes clusters')
 source=("$pkgname-$pkgver.tar.gz::$url/releases/download/v$pkgver/berth-linux.tar.gz")
-sha256sums=('SKIP')
+sha256sums=('eb87fb37573ce064b63536c3c3a313b3300850e9b11f2b72a2513c0f6aa9536d')
 
 package() {
   cd "$srcdir/berth-$pkgver"

@@ -60,7 +60,16 @@ verify it runs → delete the old one. Any failure removes the replacement and r
 
 Volume browsing, export, import and clone use a throwaway `busybox` helper container (labelled
 `io.github.subhadeeproy3902.berth.helper=volume`, auto-removed). Vulnerability scans run `aquasec/trivy` as a container
-with its database cached in the `berth-trivy-cache` volume.
+with its database cached in the `berth-trivy-cache` volume. Every scan's counts are kept in `~/.local/state/berth/scans.json` (last 10 per
+image) for the Security column and the scan window's comparison. **Safe updates** scan the current and the new version
+and re-tag the current one back when the new one adds critical / high findings.
+
+## Alerts and scheduled scans (`watch.py`)
+
+One timer in `app.py` ticks once a minute. With every alert off it does nothing. Otherwise it reads `cpu.stat` and
+`memory.*` from each running container's cgroup (one stats call per container on non-local engines) and
+`shutil.disk_usage` of Docker's data folder; an alert repeats at most once an hour (disk: every six hours).
+The same tick runs the daily image-update check app-wide and the daily / weekly scan of the images in use.
 
 ## Databases (`db.py`, `db_page.py`)
 

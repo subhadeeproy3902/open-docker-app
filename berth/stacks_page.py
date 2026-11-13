@@ -114,6 +114,8 @@ class StacksPage(Gtk.Box):
             b = icon_button(icon, tip, lambda *_a, f=fn: f())
             box.append(b)
         menu = Gio.Menu()
+        menu.append("Environment and secrets…", f"stk.env::{p}")
+        menu.append("Dependency graph…", f"stk.graph::{p}")
         menu.append("Check the compose file", f"stk.check::{p}")
         menu.append("Edit the compose file…", f"stk.edit::{p}")
         menu.append("Show its logs", f"stk.logs::{p}")
@@ -127,7 +129,11 @@ class StacksPage(Gtk.Box):
         g.set_header_suffix(box)
         ag = Gio.SimpleActionGroup()
         from gi.repository import GLib
-        for name, fn in (("check", self._check), ("edit", self._edit), ("logs", self._logs), ("folder", self._folder),
+        for name, fn in (("env", lambda p_: __import__("berth.stack_env", fromlist=["x"]).EnvDialog(
+                             self.win, self.store, p_).present(self.win)),
+                         ("graph", lambda p_: __import__("berth.viz", fromlist=["x"]).GraphDialog(
+                             self.win, self.store, p_).present(self.win)),
+                         ("check", self._check), ("edit", self._edit), ("logs", self._logs), ("folder", self._folder),
                          ("forget", self._forget)):
             a = Gio.SimpleAction.new(name, GLib.VariantType.new("s"))
             a.connect("activate", lambda _a, v, f=fn: f(v.get_string()))

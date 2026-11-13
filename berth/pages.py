@@ -1480,8 +1480,12 @@ class NetworksPage(TablePage):
             push_detail(self.nav, NetworkDetail(self, row.data))
 
     def header_buttons(self):
+        m = Gtk.Button(label="Map", tooltip_text="Which containers share which networks, published ports, and a "
+                                                 "reachability check")
+        m.connect("clicked", lambda *_: __import__("berth.viz", fromlist=["x"]).NetworkMap(
+            self.win, self.store).present(self.win))
         return [icon_button("user-trash-full-symbolic", "Delete unused networks", self._prune, css=()),
-                icon_button("list-add-symbolic", "Create network", self._create, css=())]
+                icon_button("list-add-symbolic", "Create network", self._create, css=()), m]
 
     def _create(self):
         d = Adw.AlertDialog(heading="Create a network", body="A bridge network containers can join to reach each other by name.")

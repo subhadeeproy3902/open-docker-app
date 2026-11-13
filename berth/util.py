@@ -283,6 +283,20 @@ def open_uri(uri):
 IS_LINUX = sys.platform.startswith("linux")
 IS_MAC = sys.platform == "darwin"
 IS_WIN = os.name == "nt"
+
+if IS_WIN:
+    # Berth is a windowed app on Windows (no console). Console programs it starts (docker, kubectl…) must not get a
+    # console window or inherit the missing stdin: that made the packaged app end with exit code 127 when the
+    # Builds page ran `docker buildx` (CI self-test). One place for every subprocess call.
+    import subprocess as _sp
+    _popen_init = _sp.Popen.__init__
+
+    def _quiet_popen(self, *a, **k):
+        k["creationflags"] = k.get("creationflags", 0) | 0x08000000      # CREATE_NO_WINDOW
+        if k.get("stdin") is None:
+            k["stdin"] = _sp.DEVNULL
+        _popen_init(self, *a, **k)
+    _sp.Popen.__init__ = _quiet_popen
 IN_FLATPAK = os.path.exists("/.flatpak-info")
 
 

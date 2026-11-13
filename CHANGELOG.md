@@ -84,6 +84,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
   list wasn't loaded yet; Settings offered Stop / Remove for a proxy that doesn't exist; Pull lists official
   images first. `_id` is read-only in MongoDB documents.
 - The click-through suites refuse to run against anything but the demo engine (unless told otherwise).
+- **Windows**: the Disk usage page and the status bar crashed (`os.statvfs` doesn't exist there) — now
+  `shutil.disk_usage`; free space is shown only for local engines (a remote engine's disk isn't on this computer).
+  The self-test ends with a report instead of hanging when a step fails.
 - The volume page header no longer overflows a 1024 px window (Import, Clone and Rename moved into ⋮). CI fails
   on any layout wider than the window.
 - **macOS**: keyboard shortcuts use ⌘ (they were Ctrl only). **Windows**: "Pull and recreate" no longer needs `sh`.

@@ -1842,8 +1842,11 @@ class DiskPage(Gtk.Box):
         self._clear(self.fs_group)
         root = self.store.info.get("DockerRootDir") or "/var/lib/docker"
         try:
-            st = os.statvfs(root)
-            total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+            if not self.store.engine.path.startswith(("/", "unix://", "npipe://")):
+                raise OSError("a remote engine: its disk isn't on this computer")
+            import shutil
+            du = shutil.disk_usage(root)                          # works on Linux, macOS and Windows
+            total, free = du.total, du.free
             r = Adw.ActionRow(title=esc(root), subtitle=f"{fmt_bytes(total - free)} used · {fmt_bytes(free)} free of {fmt_bytes(total)}")
             lvl = Gtk.LevelBar(min_value=0, max_value=1, value=(total - free) / total if total else 0, valign=Gtk.Align.CENTER,
                                width_request=220)

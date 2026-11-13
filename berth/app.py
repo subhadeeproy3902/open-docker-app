@@ -270,12 +270,14 @@ class Window(Adw.ApplicationWindow):
 
     def _disk_text(self):
         root = self.store.info.get("DockerRootDir")
+        local = self.store.engine.path.startswith(("/", "unix://", "npipe://"))   # a remote engine's disk isn't here
         try:
-            st = os.statvfs(root) if root else None
-        except OSError:
-            st = None
-        self.sb_disk.set_text(f"Docker disk {fmt_bytes(st.f_bavail * st.f_frsize)} free" if st else "")
-        self.sb_disk.set_tooltip_text(f"Free space where Docker keeps its data ({root})" if st else None)
+            import shutil
+            du = shutil.disk_usage(root) if root and local else None              # works on Linux, macOS, Windows
+        except (OSError, ValueError):
+            du = None
+        self.sb_disk.set_text(f"Docker disk {fmt_bytes(du.free)} free" if du else "")
+        self.sb_disk.set_tooltip_text(f"Free space where Docker keeps its data ({root})" if du else None)
         return True
 
     # ── engine ──
@@ -682,7 +684,9 @@ class App(Adw.Application):
         def tick():
             try:
                 GLib.timeout_add(next(it), tick)
-            except StopIteration:
+            except Exception as e:                    # a crash in a step must end the test, not hang it
+                if not isinstance(e, StopIteration):
+                    errors.append(f"self-test step: {type(e).__name__}: {e}")
                 print(f"self-test: {len(PAGES)} pages, {len(dialogs)} dialogs, {len(errors)} errors", flush=True)
                 for e in errors[:20]:
                     print("  ", e, flush=True)

@@ -11,8 +11,9 @@ from gi.repository import Adw, Gio, GLib, Gtk
 
 from .util import bg, confirm, esc, fmt_bytes, icon_button, label
 
+# exit 0 at the end: in an empty folder the last test fails, and that must not read as "no shell"
 LIST = ('cd -- "$1" 2>/dev/null || exit 3; for f in .* *; do case "$f" in .|..) continue;; esac; '
-        '{ [ -e "$f" ] || [ -L "$f" ]; } && stat -c "%F|%s|%Y|%a|%U|%n" -- "$f" 2>/dev/null; done')
+        '{ [ -e "$f" ] || [ -L "$f" ]; } && stat -c "%F|%s|%Y|%a|%U/%u|%n" -- "$f" 2>/dev/null; done; exit 0')
 MAX_EDIT = 2 * 1024 * 1024
 HELPER_IMAGE = "busybox:latest"
 HELPER_LABEL = "io.github.subhadeeproy3902.berth.helper"
@@ -99,7 +100,7 @@ class FileBrowser(Gtk.Box):
         paned.set_end_child(right)
         self.append(paned)
         keys = Gtk.ShortcutController()
-        keys.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("<Control>s"),
+        keys.add_shortcut(Gtk.Shortcut(trigger=Gtk.ShortcutTrigger.parse_string("<Primary>s"),
                                        action=Gtk.CallbackAction.new(lambda *_: (self._save(), True)[1])))
         self.add_controller(keys)
         self.selected = None
@@ -127,6 +128,8 @@ class FileBrowser(Gtk.Box):
                 self.list.append(Gtk.Label(label="Empty folder", margin_top=12, css_classes=["dim-label"]))
             ents.sort(key=lambda e: ("directory" not in e[0], e[5].lower()))
             for kind, size, mtime, perm, owner, name in ents[:5000]:
+                user, _s, uid = owner.partition("/")       # a user the image doesn't know shows as its number
+                owner = user if user and user != "UNKNOWN" else (f"uid {uid}" if uid else user)
                 is_dir, is_link = "directory" in kind, "link" in kind
                 row = Adw.ActionRow(title=esc(name), activatable=True,
                                     subtitle=f"{'folder' if is_dir else fmt_bytes(int(size or 0))} · "
@@ -342,7 +345,8 @@ def stop_volume_helper(engine, cid):
 
 def cleanup_helpers(engine):
     # only volume helpers: a scan container (label value "scan") may belong to a scan still running elsewhere
-    for c in engine.containers_filtered({"label": [f"{HELPER_LABEL}=volume"]}) or []:
+    for c in (engine.containers_filtered({"label": [f"{HELPER_LABEL}=volume"]}) or []) + \
+            (engine.containers_filtered({"label": [f"{HELPER_LABEL}=http"]}) or []):   # + database HTTP helpers
         try:
             engine.remove_container(c["Id"])
         except Exception:  # noqa: BLE001

@@ -1,6 +1,7 @@
 """Render every page off-screen and save PNGs (+ 2x2 contact sheets) — for design review and README screenshots.
   gtk4-broadwayd :9 &   GDK_BACKEND=broadway BROADWAY_DISPLAY=:9 python3 tools/shots.py OUTDIR [light|dark] [W H]"""
 import os, sys, time
+os.environ.setdefault("BERTH_NO_UPDATE_CHECK", "1")       # never ask GitHub for releases from a script
 os.environ.setdefault("BERTH_NO_WELCOME", "1")      # the first-run welcome would cover the window
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import gi
@@ -10,7 +11,7 @@ from berth import app as A
 
 OUT = sys.argv[1]; THEME = sys.argv[2] if len(sys.argv) > 2 else "dark"
 os.makedirs(OUT, exist_ok=True)
-PAGES = ["containers", "images", "volumes", "networks", "logs", "builds", "cache", "resources", "disk", "kubernetes", "settings"]
+PAGES = ["containers", "images", "volumes", "networks", "databases", "sharing", "send", "logs", "builds", "cache", "resources", "disk", "kubernetes", "settings"]
 
 
 def grab(win, name):

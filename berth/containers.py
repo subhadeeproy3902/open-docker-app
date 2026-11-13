@@ -14,10 +14,10 @@ from .edit import EditDialog
 from .engine import demux
 from .files import FileBrowser
 from .logs import LogsExplorer
-from .util import (Row, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
+from .util import (release_on_leave, Row, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
                    fmt_rate, icon_button, label, labels, open_uri, short_status, spawn, state_of,
                    terminal_argv, themed, thread, detail_tag, push_detail, toolbar_row,
-                   run_in_terminal, PageHeader, flat_page, table_card)
+                   run_in_terminal, PageHeader, flat_page, table_card, WidePrefs)
 
 try:
     gi.require_version("Vte", "3.91")
@@ -157,6 +157,29 @@ class Actions:
         open_uri(f"http://localhost:{port}")
 
 
+def _db_kind(c):
+    from .db import detect
+    return detect(c)
+
+
+_marks = {"key": None, "val": (set(), {})}
+
+
+def _connect_marks(page):
+    """(names shared publicly, {name: [local addresses]}) — computed once per container list, not per row."""
+    cs = page.store.containers
+    routes = page.settings["routes"] or []
+    key = (id(cs), len(cs), len(routes))
+    if _marks["key"] != key:
+        pub = {(c.get("Labels") or {}).get("io.berth.target") for c in cs
+               if (c.get("Labels") or {}).get("io.berth.role") == "tunnel" and c.get("State") == "running"}
+        addr = {}
+        for r in routes:
+            addr.setdefault(r["container"], []).append(f"{r['name']}.localhost")
+        _marks["key"], _marks["val"] = key, (pub, addr)
+    return _marks["val"]
+
+
 # ── list cells ──
 class NameCell(Gtk.TreeExpander):
     def __init__(self):
@@ -166,7 +189,14 @@ class NameCell(Gtk.TreeExpander):
         col = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, valign=Gtk.Align.CENTER)
         self.title = label(css=["heading-sm"])
         self.sub = label(css=["dim-label", "caption"])
-        col.append(self.title)
+        top = Gtk.Box(spacing=6)
+        top.append(self.title)
+        self.badge_pub = label("public", css=["status-pill", "warn", "name-badge"], ellipsize=False, visible=False,
+                               tooltip_text="Shared on the internet right now — see Ports & sharing")
+        self.badge_addr = label("address", css=["status-pill", "ok", "name-badge"], ellipsize=False, visible=False)
+        top.append(self.badge_pub)
+        top.append(self.badge_addr)
+        col.append(top)
         col.append(self.sub)
         box.append(self.dot)
         box.append(col)
@@ -187,6 +217,12 @@ class NameCell(Gtk.TreeExpander):
             self.dot.set_tooltip_text(st)
             self.title.set_text(service(c) if row.extra.get("in_group") else cname(c))
             self.sub.set_text(cname(c) if row.extra.get("in_group") else c.get("Id", "")[:12])
+            pub, addr = _connect_marks(page)
+            n = cname(c)
+            self.badge_pub.set_visible(n in pub)
+            self.badge_addr.set_visible(n in addr)
+            if n in addr:
+                self.badge_addr.set_tooltip_text("Has a local address: " + ", ".join(addr[n]))
 
 
 class TextCell(Gtk.Label):
@@ -305,7 +341,9 @@ class ActionsCell(Gtk.Box):
             self.main.set_tooltip_text("Stop" if run or c["State"] == "paused" else "Start")
             cid = c["Id"]
             m.append("View details", f"ctr.open::{cid}")
-            m.append("Edit…", f"ctr.edit::{cid}")
+            m.append("Rename…", f"ctr.rename::{cid}")
+            m.append("Change ports…", f"ctr.ports::{cid}")
+            m.append("Edit everything…", f"ctr.edit::{cid}")
             if c["State"] == "running":
                 m.append("Restart", f"ctr.verb::restart|{cid}")
                 m.append("Pause", f"ctr.verb::pause|{cid}")
@@ -314,6 +352,14 @@ class ActionsCell(Gtk.Box):
                 m.append("Resume", f"ctr.verb::unpause|{cid}")
             for pub, _ in ports(c)[:4]:
                 m.append(f"Open localhost:{pub}", f"ctr.port::{pub}")
+            if c["State"] == "running" and not labels(c).get("io.berth.role"):
+                conn = Gio.Menu()
+                from .db import detect
+                if detect(c):
+                    conn.append("Browse database", f"ctr.db::{cid}")
+                conn.append("Give it a local address…", f"ctr.expose::{cid}")
+                conn.append("Share publicly…", f"ctr.share::{cid}")
+                m.append_section(None, conn)
             extra = Gio.Menu()
             extra.append("Copy docker run command", f"ctr.runcmd::{cid}")
             extra.append("Save as image…", f"ctr.commit::{cid}")
@@ -376,11 +422,42 @@ class ContainersPage(Gtk.Box):
         self.run_filter = run
         run.connect("notify::active-name", lambda g, *_: self._on_filter(g.get_active_name()))
         exp = icon_button("view-list-symbolic", "Expand / collapse all stacks", self._toggle_all, css=("flat",))
+        # selection mode: tick several containers (or whole stacks) and start / stop / restart / remove them at once
+        self.selecting, self.picked = False, set()
+        self.sel_btn = Gtk.ToggleButton(icon_name="object-select-symbolic", valign=Gtk.Align.CENTER,
+                                        tooltip_text="Select several containers (start, stop, restart or remove "
+                                                     "them together)")
+        self.sel_btn.add_css_class("flat")
+        self.sel_btn.connect("toggled", lambda b: self._select_mode(b.get_active()))
         cmp = Gtk.Button(label="Run Compose file…", tooltip_text="Start a stack from a compose.yaml")
         cmp.add_css_class("suggested-action")
         cmp.connect("clicked", lambda *_: compose.ComposeOpen(self.win, self.store).present(self.win))
         self.wtitle.add(cmp)
-        flat_page(tv, self.wtitle, toolbar_row(self.search, run, Gtk.Box(hexpand=True), exp))
+        flat_page(tv, self.wtitle, toolbar_row(self.search, run, Gtk.Box(hexpand=True), exp, self.sel_btn))
+        bar = Gtk.ActionBar()
+        self.sel_label = label("", css=["heading"])
+        bar.pack_start(self.sel_label)
+        allb = Gtk.Button(label="All", tooltip_text="Select every container shown")
+        allb.add_css_class("flat")
+        allb.connect("clicked", lambda *_: self._pick_all(True))
+        noneb = Gtk.Button(label="None", tooltip_text="Clear the selection")
+        noneb.add_css_class("flat")
+        noneb.connect("clicked", lambda *_: self._pick_all(False))
+        bar.pack_start(allb)
+        bar.pack_start(noneb)
+        self.bulk_btns = []
+        for verb, lbl, tip in (("remove", "Remove", "Remove the selected containers (running ones are stopped first)"),
+                               ("restart", "Restart", "Restart the selected containers"),
+                               ("stop", "Stop", "Stop the selected containers"),
+                               ("start", "Start", "Start the selected containers")):
+            b = Gtk.Button(label=lbl, tooltip_text=tip)
+            if verb == "remove":
+                b.add_css_class("destructive-action")
+            b.connect("clicked", lambda *_a, v=verb: self._bulk(v))
+            bar.pack_end(b)
+            self.bulk_btns.append(b)
+        self.sel_bar = Gtk.Revealer(child=bar, transition_type=Gtk.RevealerTransitionType.SLIDE_UP, reveal_child=False)
+        tv.add_bottom_bar(self.sel_bar)
 
         # list
         self.root = Gio.ListStore(item_type=Row)
@@ -391,7 +468,7 @@ class ContainersPage(Gtk.Box):
         self.view.add_css_class("berth-table")
         self.view.connect("activate", self._on_activate)
         self._columns()
-        sw = table_card(self.view)
+        sw = table_card(self.view, fit=True)
         self.stack = Gtk.Stack()
         self.stack.add_named(sw, "list")
         self.empty = Adw.StatusPage(icon_name="view-grid-symbolic")
@@ -417,7 +494,14 @@ class ContainersPage(Gtk.Box):
                          ("copy", self._a_copy),
                          ("edit", lambda v: EditDialog(self.win, self.store, v).present(self.win)),
                          ("runcmd", lambda v: self.actions.copy_run(v)), ("commit", lambda v: self.actions.commit(v)),
-                         ("export", lambda v: self.actions.export_fs(v))):
+                         ("export", lambda v: self.actions.export_fs(v)),
+                         ("db", lambda v: (self.win.go("databases"), self.win.pages["databases"].open(v))),
+                         ("rename", lambda v: __import__("berth.quick", fromlist=["x"]).rename_container(
+                             self.win, self.store, v)),
+                         ("ports", lambda v: __import__("berth.quick", fromlist=["x"]).PortsDialog(
+                             self.win, self.store, v).present(self.win)),
+                         ("expose", lambda v: self._sharing_dialog("ExposeDialog", v)),
+                         ("share", lambda v: self._sharing_dialog("ShareDialog", v))):
             a = Gio.SimpleAction.new(name, GLib.VariantType.new("s"))
             a.connect("activate", lambda _a, p, f=fn: f(p.get_string()))
             ag.add_action(a)
@@ -429,6 +513,26 @@ class ContainersPage(Gtk.Box):
 
     # ── columns ──
     def _columns(self):
+        def pick_setup():
+            cb = Gtk.CheckButton(valign=Gtk.Align.CENTER, halign=Gtk.Align.CENTER)
+            cb.binding = False
+            cb.connect("toggled", lambda b: not b.binding and b.row is not None and self._pick(b.row, b.get_active()))
+            cb.row = None
+            return cb
+
+        def pick_bind(w, row, _tr):
+            w.binding = True
+            w.row = row
+            if row.kind == "project":
+                kids = [c for c in self._children_of(row)]
+                w.set_active(bool(kids) and all(k.key in self.picked for k in kids))
+                w.set_inconsistent(any(k.key in self.picked for k in kids) and not w.get_active())
+            else:
+                w.set_inconsistent(False)
+                w.set_active(row.key in self.picked)
+            w.set_tooltip_text("Select the whole stack" if row.kind == "project" else "Select")
+            w.binding = False
+
         def col(title, setup, bind, expand=False, width=-1):
             def b(w, tree_row, _li):
                 disconnect_rows(w)
@@ -445,10 +549,12 @@ class ContainersPage(Gtk.Box):
         def name_bind(w, row, tr):
             w.set_list_row(tr)
             w.update(row, self)
+        self.col_pick = col("", pick_setup, pick_bind, width=44)
+        self.col_pick.set_visible(False)
         col("Name", NameCell, name_bind, expand=True)
         self.col_image = col("Image", lambda: TextCell(["monospace", "dim-label"]),
             lambda w, r, _t: (w.set_text(r.data.get("Image", "") if r.kind == "container" else ""),
-                              w.set_tooltip_text(r.data.get("Image") if r.kind == "container" else None)), width=160)
+                              w.set_tooltip_text(r.data.get("Image") if r.kind == "container" else None)), expand=True)
         col("Status", lambda: TextCell(["dim-label"]),
             lambda w, r, _t: w.set_text(short_status(r.data.get("Status", "")) if r.kind == "container" else ""), width=132)
         self.col_ports = col("Ports", lambda: PortsCell(self.actions), lambda w, r, _t: w.update(r), width=118)
@@ -597,6 +703,85 @@ class ContainersPage(Gtk.Box):
         self._remember_expansion()
         self.settings["expanded"] = self.expanded
 
+    # ── selection mode ──
+    def _children_of(self, row):
+        ch = getattr(row, "children", None)
+        return [ch.get_item(i) for i in range(ch.get_n_items())] if ch is not None else []
+
+    def _select_mode(self, on):
+        self.selecting = on
+        if not on:
+            self.picked.clear()
+        self.col_pick.set_visible(on)
+        self.sel_bar.set_reveal_child(on)
+        self._sync_picked()
+
+    def _pick(self, row, on):
+        keys = [k.key for k in self._children_of(row)] if row.kind == "project" else [row.key]
+        (self.picked.update if on else self.picked.difference_update)(keys)
+        self._sync_picked()
+
+    def _pick_all(self, on):
+        if on:
+            self.picked = {c["Id"] for c in self.store.containers if self._visible_container(c)}
+        else:
+            self.picked.clear()
+        self._sync_picked()
+
+    def _visible_container(self, c):
+        return c["Id"] in self.items
+
+    def _sync_picked(self):
+        self.picked &= {c["Id"] for c in self.store.containers}          # gone containers drop out
+        n = len(self.picked)
+        self.sel_label.set_text(f"{n} selected" if n else "Tick containers or stacks")
+        for b in self.bulk_btns:
+            b.set_sensitive(n > 0)
+        for r in list(self.items.values()) + list(self.groups.values()):
+            r.emit("changed")
+
+    def _bulk(self, verb):
+        ids = list(self.picked)
+        names = [cname(self.store.by_id(i)) for i in ids if self.store.by_id(i)]
+        if not ids:
+            return
+        e = self.store.engine
+
+        def work():
+            fails = []
+            for cid in ids:
+                try:
+                    if verb == "remove":
+                        e.remove_container(cid, force=True)
+                    else:
+                        e.action(cid, verb)
+                except Exception as ex:          # one failure must not stop the rest
+                    fails.append(f"{cname(self.store.by_id(cid) or {'Names': [cid[:12]]})}: {ex}")
+            return fails
+
+        def done(fails):
+            word = {"start": "Started", "stop": "Stopped", "restart": "Restarted", "remove": "Removed"}[verb]
+            ok = len(ids) - len(fails)
+            self.win.toast(f"{word} {ok} of {len(ids)}" + (f" — {fails[0][:120]}" if fails else ""))
+            if verb == "remove":
+                self.picked.clear()
+            self.store.refresh("containers")
+            self._sync_picked()
+
+        def go():
+            self.win.toast(f"{verb.capitalize()}ing {len(ids)} container{'s' if len(ids) > 1 else ''}…"
+                           if verb != "stop" else f"Stopping {len(ids)}…")
+            bg(work, done=done, error=lambda ex: self.win.toast(str(ex)))
+        if verb in ("remove", "stop"):
+            listing = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
+            confirm(self.win, f"{'Remove' if verb == 'remove' else 'Stop'} {len(ids)} container"
+                    f"{'s' if len(ids) > 1 else ''}?",
+                    esc(listing) + ("\n\nRunning ones are stopped first. Volumes and their data are kept."
+                                    if verb == "remove" else ""),
+                    "Remove" if verb == "remove" else "Stop", go)
+        else:
+            go()
+
     def _toggle_all(self):
         self._remember_expansion()
         target = not any(self.expanded.values())
@@ -618,6 +803,10 @@ class ContainersPage(Gtk.Box):
     def _on_filter(self, name):
         self.status_filter = name or "all"
         self._sync()
+
+    def _sharing_dialog(self, kind, cid):
+        from . import sharing_page
+        getattr(sharing_page, kind)(self.win.pages["sharing"], cid).present(self.win)
 
     def _run_sample(self):
         from .onboarding import SAMPLE_NAME, SAMPLE_PORT, run_sample
@@ -649,6 +838,10 @@ class ContainersPage(Gtk.Box):
         tr = self.tree.get_row(pos)
         it = tr.get_item() if tr else None
         if not it:
+            return
+        if self.selecting:                               # in selection mode a click ticks the row
+            kids = self._children_of(it) if it.kind == "project" else [it]
+            self._pick(it, not all(k.key in self.picked for k in kids))
             return
         if it.kind == "project":
             tr.set_expanded(not tr.get_expanded())
@@ -710,6 +903,10 @@ class ContainerDetail(Adw.NavigationPage):
                                    tooltip_text="Change name, environment, ports, volumes, limits…")
         self.btn_edit.connect("clicked", lambda *_: EditDialog(page.win, self.store, self.cid).present(page.win))
         more = Gio.Menu()
+        quick = Gio.Menu()
+        quick.append("Rename…", "det.rename")
+        quick.append("Change ports…", "det.ports")
+        more.append_section(None, quick)
         more.append("Copy docker run command", "det.runcmd")
         more.append("Save as image…", "det.commit")
         more.append("Export filesystem…", "det.export")
@@ -717,7 +914,10 @@ class ContainerDetail(Adw.NavigationPage):
                                        tooltip_text="More")
         self.btn_more.add_css_class("flat")
         dag = Gio.SimpleActionGroup()
-        for n, fn in (("runcmd", self.actions.copy_run), ("commit", self.actions.commit), ("export", self.actions.export_fs)):
+        from . import quick as _q
+        for n, fn in (("runcmd", self.actions.copy_run), ("commit", self.actions.commit), ("export", self.actions.export_fs),
+                      ("rename", lambda c: _q.rename_container(page.win, self.store, c)),
+                      ("ports", lambda c: _q.PortsDialog(page.win, self.store, c).present(page.win))):
             a = Gio.SimpleAction.new(n, None)
             a.connect("activate", lambda *_a, f=fn: f(self.cid))
             dag.add_action(a)
@@ -744,7 +944,8 @@ class ContainerDetail(Adw.NavigationPage):
                                   ("mounts", "Mounts", "folder-symbolic"),
                                   ("exec", "Exec", "utilities-terminal-symbolic"),
                                   ("files", "Files", "folder-open-symbolic"),
-                                  ("stats", "Stats", "utilities-system-monitor-symbolic")):
+                                  ("stats", "Stats", "utilities-system-monitor-symbolic"),
+                                  *((("database", "Database", "drive-multidisk-symbolic"),) if _db_kind(c) else ())):
             if icon == "utilities-system-monitor-symbolic":
                 icon = themed(icon, "power-profile-performance-symbolic")
             self.tabs.add_titled_with_icon(Gtk.Box(orientation=Gtk.Orientation.VERTICAL), name, title, icon)
@@ -752,15 +953,33 @@ class ContainerDetail(Adw.NavigationPage):
         self.connect("shown", lambda *_: self._tab())
         self._h1 = self.store.connect("containers", lambda *_: self._refresh())
         self._h2 = self.store.connect("stats", lambda *_: self._stats())
-        self.connect("destroy", lambda *_: self._disconnect())
+        release_on_leave(self, self._disconnect)
         self._refresh()
 
     def _disconnect(self):
+        """Leaving for good: unsubscribe and drop the heavy parts (log lines, charts, terminal) so the page can be
+        freed. Without this every container ever opened stayed in memory — 2.7 GB after a long day."""
         for h in (self._h1, self._h2):
             try:
                 self.store.disconnect(h)
             except TypeError:
                 pass
+        self._h1 = self._h2 = None
+        logs = getattr(self, "logs", None)
+        if logs is not None:
+            logs._stop()
+            logs.entries = []
+            logs.buf.set_text("")
+        for name in list(getattr(self, "built", ())):
+            ch = self.tabs.get_child_by_name(name)
+            if ch is not None:
+                self.tabs.remove(ch)
+        self.built = set()
+        self.logs = None
+        if getattr(self, "explorer", None) is not None:
+            self.explorer.close()
+            self.explorer = None
+        self.set_child(None)                  # release the whole widget tree, cycles and all
 
     def _gone(self):
         self.page.nav.pop_to_tag("list")
@@ -809,7 +1028,7 @@ class ContainerDetail(Adw.NavigationPage):
         if name not in self.built and name != "logs":
             self.built.add(name)
             builder = {"inspect": self._build_inspect, "mounts": self._build_mounts, "exec": self._build_exec,
-                       "files": self._build_files, "stats": self._build_stats}[name]
+                       "files": self._build_files, "stats": self._build_stats, "database": self._build_database}[name]
             child = self.tabs.get_child_by_name(name)
             new = builder()
             new.set_vexpand(True)
@@ -817,13 +1036,39 @@ class ContainerDetail(Adw.NavigationPage):
             child.append(new)
         self.page.win.update_saver()
 
+    def _build_database(self):
+        """The same explorer as the Databases page, inside this container's details."""
+        from . import db
+        from .db_page import Explorer
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, vexpand=True)
+        spin = Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, vexpand=True, width_request=32,
+                           height_request=32)
+        box.append(spin)
+
+        def work():
+            ins = self.store.engine.inspect(self.cid)
+            return db.open_backend(self.store.engine, ins), (ins.get("Name") or "").lstrip("/")
+
+        def done(r):
+            backend, title = r
+            box.remove(spin)
+            self.explorer = Explorer(self.page.win.pages["databases"], backend, title, embedded=True)
+            box.append(self.explorer)
+
+        def fail(e):
+            box.remove(spin)
+            box.append(Adw.StatusPage(icon_name="dialog-warning-symbolic", title="Can't open this database",
+                                      description=esc(str(e)), vexpand=True))
+        bg(work, done=done, error=fail)
+        return box
+
     def stats_visible(self):
         return self.get_mapped() and self.tabs.get_visible_child_name() == "stats"
 
     # inspect
     def _build_inspect(self):
         box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        self.insp = Adw.PreferencesPage()
+        self.insp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))
         box.append(self.insp)
         self.insp.set_vexpand(True)
         self.reveal = False
@@ -894,7 +1139,7 @@ class ContainerDetail(Adw.NavigationPage):
 
     # mounts
     def _build_mounts(self):
-        pp = Adw.PreferencesPage()
+        pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))
         g = Adw.PreferencesGroup(title="Mounts", description="Folders and volumes this container reads and writes.")
         pp.add(g)
 

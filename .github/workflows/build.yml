@@ -23,13 +23,76 @@ jobs:
       - name: Ruff (errors only)
         run: pip install ruff && ruff check --select E9,F63,F7,F82 berth tests tools
       - name: Shell scripts
-        run: shellcheck -S warning scripts/install.sh tools/demo/up.sh tools/demo/down.sh
+        run: shellcheck -S warning scripts/install.sh tools/demo/up.sh tools/demo/down.sh tools/distro_test.sh tools/ci_app_tests.sh
       - name: Desktop + AppStream metadata
         run: |
           sudo apt-get install -y -qq desktop-file-utils appstream >/dev/null
           sed 's|@BINDIR@|/usr/bin|; s|@ICON@|io.github.subhadeeproy3902.Berth|' data/io.github.subhadeeproy3902.Berth.desktop.in > /tmp/berth.desktop
           desktop-file-validate /tmp/berth.desktop
           appstreamcli validate --no-net --pedantic data/io.github.subhadeeproy3902.Berth.metainfo.xml || appstreamcli validate --no-net data/io.github.subhadeeproy3902.Berth.metainfo.xml
+
+  connect:
+    name: Databases & sharing (real Docker)
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: PyGObject (the volume helper code imports it)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 >/dev/null
+      - name: Integration test against the runner's Docker (public tunnel skipped)
+        run: /usr/bin/python3 tests/connect.py --no-tunnel
+
+  app-tests:
+    name: App tests (every page, dialog and user path)
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: Demo engine (an isolated Docker inside Docker with sample stacks)
+        run: sh tools/demo/up.sh
+      - name: drive · clickall · ui audit · send files · ssh · self-test (Arch container, current GTK)
+        run: sh tools/ci_app_tests.sh
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with: { name: app-tests, path: ci-out }
+
+  distros:
+    name: Linux ${{ matrix.distro }} (installer + every screen)
+    needs: check
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        distro: [fedora, debian, ubuntu, opensuse, arch]
+    steps:
+      - uses: actions/checkout@v7
+      - run: sh tools/demo/up.sh
+      - name: Install with scripts/install.sh, then open every screen
+        run: OUT="$PWD/distro-out" sh tools/distro_test.sh ${{ matrix.distro }}
+      - if: always()
+        uses: actions/upload-artifact@v7
+        with: { name: "distro-${{ matrix.distro }}", path: distro-out }
+
+  windows-pipe:
+    name: Windows named pipe (the runner's Docker)
+    needs: check
+    runs-on: windows-2022
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with: { python-version: "3.12" }
+      - name: Docker service on the runner
+        shell: pwsh
+        run: |
+          $s = Get-Service docker
+          if ($s.Status -ne 'Running') { Start-Service docker }
+          Get-Service docker
+      - name: Berth talks to Docker through \\.\pipe\docker_engine (ping, lists, streams, a container's logs)
+        run: python tools/pipe_check.py
 
   linux-tarball:
     name: Linux tarball
@@ -86,6 +149,9 @@ jobs:
           codesign --verify --deep --strict --verbose=2 dist/Berth.app
       - name: Smoke test
         run: ./dist/Berth.app/Contents/MacOS/Berth --version
+      - name: Self-test (every page and the main dialogs, no engine)
+        timeout-minutes: 4
+        run: ./dist/Berth.app/Contents/MacOS/Berth --self-test
       - name: Launch test (the app renders its own window to a PNG, then quits)
         timeout-minutes: 3
         run: |
@@ -124,6 +190,9 @@ jobs:
         run: python -m PyInstaller --noconfirm packaging/pyinstaller/berth.spec
       - name: Smoke test
         run: ./dist/Berth/Berth.exe --version
+      - name: Self-test (every page and the main dialogs, no engine)
+        timeout-minutes: 4
+        run: ./dist/Berth/Berth.exe --self-test
       - name: Launch test (the app renders its own window to a PNG, then quits)
         timeout-minutes: 3
         run: |

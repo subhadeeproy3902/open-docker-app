@@ -1,6 +1,7 @@
 """Small shared helpers: background work, formatting, settings, dialogs."""
 import json
 import os
+import weakref
 import shutil
 import subprocess
 import sys
@@ -32,14 +33,71 @@ def app_icon():
 _POOL = ThreadPoolExecutor(max_workers=4, thread_name_prefix="berth")
 
 
+# ── diagnostics: every error lands in ~/.cache/berth/berth.log (≈2 MB max), so problems can be reported ──
+LOG_PATH = os.path.join(GLib.get_user_cache_dir(), "berth", "berth.log")
+_log_lock = threading.Lock()
+
+
+def log_error(where, exc=None, tb=None):
+    import traceback
+    try:
+        os.makedirs(os.path.dirname(LOG_PATH), exist_ok=True)
+        if os.path.exists(LOG_PATH) and os.path.getsize(LOG_PATH) > 1_000_000:
+            os.replace(LOG_PATH, LOG_PATH + ".1")
+        text = tb or ("".join(traceback.format_exception(exc)) if isinstance(exc, BaseException) else str(exc or ""))
+        with _log_lock, open(LOG_PATH, "a") as f:
+            f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} [{where}] {text.rstrip()}\n")
+    except OSError:
+        pass
+
+
+def install_error_log():
+    """Uncaught errors (including those inside GTK callbacks) go to the log as well as stderr."""
+    import traceback
+    prev = sys.excepthook
+
+    def hook(t, v, tb):
+        log_error("uncaught", tb="".join(traceback.format_exception(t, v, tb)))
+        prev(t, v, tb)
+    sys.excepthook = hook
+
+
+def diagnostic_report(store=None):
+    import platform
+    lines = [f"Berth {VERSION}", f"Python {platform.python_version()} · {platform.platform()}",
+             f"GTK {Gtk.get_major_version()}.{Gtk.get_minor_version()}.{Gtk.get_micro_version()} · "
+             f"libadwaita {Adw.get_major_version()}.{Adw.get_minor_version()}.{Adw.get_micro_version()} · "
+             f"renderer {os.environ.get('GSK_RENDERER', 'default')}"]
+    if store is not None:
+        info = store.info or {}
+        lines.append(f"Engine {store.engine.path} · up={store.up} · Docker {info.get('ServerVersion', '?')} · "
+                     f"{len(store.containers)} containers")
+    try:
+        with open("/proc/self/status") as f:
+            lines += [ln.strip() for ln in f if ln.startswith(("VmRSS", "VmHWM"))]
+    except OSError:
+        pass
+    lines.append("--- last log lines ---")
+    try:
+        with open(LOG_PATH) as f:
+            lines += f.read().splitlines()[-150:]
+    except OSError:
+        lines.append("(no errors logged)")
+    return "\n".join(lines)
+
+
 def bg(fn, *args, done=None, error=None):
-    """Run fn(*args) on a worker; call done(result) / error(exc) back on the UI thread."""
+    """Run fn(*args) on a worker; call done(result) / error(exc) back on the UI thread. Every failure is logged."""
     def finish(ok, value):
         cb = done if ok else error
-        if cb:
-            cb(value)
-        elif not ok:
-            print("berth:", value)
+        try:
+            if cb:
+                cb(value)
+            elif not ok:
+                print("berth:", value)
+        except Exception as e:  # noqa: BLE001
+            log_error(f"callback of {getattr(fn, '__qualname__', fn)}", e)
+            raise
         return False
 
     def run():
@@ -47,6 +105,7 @@ def bg(fn, *args, done=None, error=None):
             value, ok = fn(*args), True
         except Exception as e:  # noqa: BLE001 — every failure goes back to the UI as a message
             value, ok = e, False
+            log_error(getattr(fn, "__qualname__", str(fn)), e)
         GLib.idle_add(finish, ok, value)
 
     _POOL.submit(run)
@@ -129,7 +188,8 @@ class Settings:
     DEFAULTS = {"theme": "system", "saver": True, "interval": 2, "window": [1240, 800], "expanded": {},
                 "software": False, "range": 600, "page": "containers", "tray": False, "engine": "",
                 "text_scale": 100, "density": "comfortable", "strong_borders": False, "reduce_motion": False,
-                "large_icons": False}
+                "large_icons": False, "db_history": {}, "routes": [], "proxy_ports": [80, 443],
+                "send_port": 8787, "backups": [], "notify": True, "update_check": True, "update_skip": "", "stacks": []}
 
     def __init__(self):
         self.path = os.path.join(GLib.get_user_config_dir(), "berth", "settings.json")
@@ -302,8 +362,8 @@ class PageHeader(Gtk.Box):
     def __init__(self, title, subtitle=""):
         super().__init__(spacing=16, css_classes=["page-header"])
         text = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=2, hexpand=True, valign=Gtk.Align.CENTER)
-        self._t = Gtk.Label(label=title, xalign=0, css_classes=["page-title"])
         from gi.repository import Pango
+        self._t = Gtk.Label(label=title, xalign=0, css_classes=["page-title"], ellipsize=Pango.EllipsizeMode.END)
         self._s = Gtk.Label(label=subtitle, xalign=0, css_classes=["page-subtitle"], ellipsize=Pango.EllipsizeMode.END,
                             visible=bool(subtitle))
         text.append(self._t)
@@ -338,11 +398,16 @@ def flat_page(tv, header, toolbar=None):
     return hb
 
 
-def table_card(child):
-    """A table inside a rounded card with page margins (instead of running edge to edge)."""
+def table_card(child, fit=False):
+    """A table inside a rounded card with page margins (instead of running edge to edge).
+    fit: the card is only as tall as its rows (and scrolls once they reach the bottom of the page) — for lists,
+    so a short list doesn't sit in a tall empty box."""
     sw = child if isinstance(child, Gtk.ScrolledWindow) else Gtk.ScrolledWindow(child=child)
-    sw.set_vexpand(True)
-    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, css_classes=["table-card"], vexpand=True, overflow=Gtk.Overflow.HIDDEN)
+    sw.set_vexpand(not fit)
+    if fit:
+        sw.set_propagate_natural_height(True)
+    card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, css_classes=["table-card"], vexpand=not fit,
+                   valign=Gtk.Align.START if fit else Gtk.Align.FILL, overflow=Gtk.Overflow.HIDDEN)
     card.append(sw)
     return card
 
@@ -391,6 +456,7 @@ def detail_tag(kind):
 def push_detail(nav, page):
     """Show a details page directly above the list, replacing any details page already open (no duplicates,
     no half-popped pages during the slide animation)."""
+    page.connect("shown", lambda p: GLib.idle_add(ensure_tooltips, nav))
     root = nav.find_page("list")
     if root is None:
         nav.push(page)
@@ -400,3 +466,145 @@ def push_detail(nav, page):
 
 def ordering(a, b):
     return Gtk.Ordering.SMALLER if a < b else Gtk.Ordering.LARGER if a > b else Gtk.Ordering.EQUAL
+
+
+def release_on_leave(page, cleanup):
+    """Run cleanup() once a navigation page has really left the window (popped or replaced), not when it is merely
+    covered by another page. GTK4 never "destroy"s a page that a store signal still references, so pages that
+    subscribe to the store must disconnect here, or every page ever opened stays in memory (with its logs)."""
+    state = {"done": False}
+
+    def check():
+        if not state["done"] and page.get_root() is None:
+            state["done"] = True
+            try:
+                cleanup()
+            except Exception as e:  # noqa: BLE001 — cleanup must never break navigation
+                log_error("cleanup", e)
+        return False
+    page.connect("hidden", lambda *_: GLib.timeout_add(400, check))
+
+
+def per_size(n, sm, md, lg, xl, xxl, xxxl):
+    """Pick a value for the window's size class (see app.SIZES)."""
+    return {"sm": sm, "md": md, "lg": lg, "xl": xl, "2xl": xxl, "3xl": xxxl}.get(n, lg)
+
+
+def set_columns(flowbox, n):
+    """Exactly n columns (min = max): the size class already guarantees the room, and a free FlowBox would wrap
+    unevenly (3 + 1)."""
+    flowbox.set_max_children_per_line(max(n, flowbox.get_min_children_per_line()))
+    flowbox.set_min_children_per_line(n)
+    flowbox.set_max_children_per_line(n)
+
+
+WIDE = weakref.WeakSet()
+
+
+class WidePrefs(Gtk.ScrolledWindow):
+    """Like Adw.PreferencesPage, but it uses big screens: a wider column that grows with the size class, and two
+    columns of groups on 2xl / 3xl instead of one narrow strip in the middle."""
+
+    def __init__(self, two_at=("2xl", "3xl")):
+        """two_at: the size classes that get two columns (detail pages use them from lg up)."""
+        super().__init__(hscrollbar_policy=Gtk.PolicyType.NEVER, vexpand=True)
+        self.groups, self.two_at = [], two_at
+        self.clamp = Adw.Clamp(maximum_size=720, tightening_threshold=600)
+        self.cols = Gtk.Box(spacing=32, homogeneous=True, css_classes=["wide-prefs"])
+        self.clamp.set_child(self.cols)
+        self.set_child(self.clamp)
+        self.n = 0
+        self.want = 1
+        self._layout(1)
+        WIDE.add(self)                       # the window tells every WidePrefs when its size class changes
+        self.connect("map", lambda *_: self.on_size(getattr(self.get_root(), "size_class", "md") or "md"))
+
+    def add(self, group):
+        self.groups.append(group)
+        self._layout(self.want, force=True)
+
+    def remove(self, group):
+        if group in self.groups:
+            self.groups.remove(group)
+        if group.get_parent():
+            group.get_parent().remove(group)
+        self._layout(self.want, force=True)
+
+    def on_size(self, n):
+        two = n in self.two_at
+        self.clamp.set_maximum_size(per_size(n, 720, 760, 820, 900, 1480, 1760) if not two or n in ("2xl", "3xl")
+                                    else per_size(n, 720, 760, 1180, 1400, 1480, 1760))
+        self.want = 2 if two else 1
+        self._layout(self.want)
+
+    def _layout(self, n, force=False):
+        n = max(1, min(n, len(self.groups)))          # one group: one column, never an empty half
+        if n == self.n and not force:
+            return
+        self.n = n
+        for g in self.groups:
+            if g.get_parent():
+                g.get_parent().remove(g)
+        while (c := self.cols.get_first_child()):
+            self.cols.remove(c)
+        boxes = [Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24, valign=Gtk.Align.START) for _ in range(n)]
+        for b in boxes:
+            self.cols.append(b)
+        # balance by rough height: fill the shorter column
+        heights = [0] * n
+        for g in self.groups:
+            i = heights.index(min(heights))
+            boxes[i].append(g)
+            heights[i] += 1 + sum(1 for _ in _iter_rows(g))
+
+
+def _iter_rows(group):
+    w = group.get_first_child()
+    stack = [w] if w else []
+    while stack:
+        x = stack.pop()
+        if isinstance(x, Adw.PreferencesRow):
+            yield x
+            continue
+        c = x.get_first_child()
+        while c:
+            stack.append(c)
+            c = c.get_next_sibling()
+
+
+# Buttons drawn by GTK / libadwaita themselves (back arrows, dialog close buttons…) come without a tooltip.
+# Every icon-only button must say what it does, so these get one when their screen opens.
+STOCK_TIPS = {"go-previous-symbolic": "Back", "window-close-symbolic": "Close", "open-menu-symbolic": "Main menu",
+              "view-more-symbolic": "More actions", "edit-find-symbolic": "Search", "go-next-symbolic": "Next",
+              "pan-down-symbolic": "Show options", "list-add-symbolic": "Add", "user-trash-symbolic": "Delete",
+              "view-refresh-symbolic": "Reload", "edit-copy-symbolic": "Copy", "document-edit-symbolic": "Edit",
+              "adw-external-link-symbolic": "Open", "go-up-symbolic": "Up one folder", "edit-clear-symbolic": "Clear"}
+
+
+def ensure_tooltips(root):
+    """Give every icon-only button under root a tooltip if it has none (run when a page or dialog opens)."""
+    stack = [root]
+    while stack:
+        w = stack.pop()
+        if isinstance(w, (Gtk.Button, Gtk.MenuButton)) and not w.get_tooltip_text() and not w.get_label():
+            ch = w.get_child() if hasattr(w, "get_child") else None
+            icon = (w.get_icon_name() if hasattr(w, "get_icon_name") else None) or \
+                (ch.get_icon_name() if isinstance(ch, Gtk.Image) else None)
+            if icon in STOCK_TIPS:
+                target = w.get_parent() if isinstance(w.get_parent(), Gtk.MenuButton) else w
+                if not target.get_tooltip_text():
+                    target.set_tooltip_text(STOCK_TIPS[icon])
+        c = w.get_first_child()
+        while c:
+            stack.append(c)
+            c = c.get_next_sibling()
+    return False
+
+
+def follow_content(dialog, width):
+    """Let a dialog grow and shrink with its content while it is open (results that arrive later, sections that
+    appear). Without this an Adw.Dialog keeps the size it had when it opened. The width stays fixed."""
+    dialog.set_follows_content_size(True)
+    child = dialog.get_child()
+    if child is not None:
+        child.set_size_request(width, -1)

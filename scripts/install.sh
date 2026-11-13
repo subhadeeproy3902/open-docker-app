@@ -47,23 +47,23 @@ install_deps() {
   say "Installing GTK 4, libadwaita and PyGObject for ${PRETTY_NAME:-your system}…"
   case " $ids " in
     *" arch "*|*" manjaro "*|*" endeavouros "*)
-      $SUDO pacman -S --needed --noconfirm python python-gobject gtk4 libadwaita make curl
+      $SUDO pacman -S --needed --noconfirm python python-gobject python-cairo gtk4 libadwaita make curl
       $SUDO pacman -S --needed --noconfirm vte4 || warn "vte4 not installed (built-in terminal disabled)" ;;
     *" debian "*|*" ubuntu "*)
       $SUDO apt-get update -qq
-      $SUDO apt-get install -y python3 python3-gi gir1.2-gtk-4.0 gir1.2-adw-1 make curl ca-certificates
+      $SUDO apt-get install -y python3 python3-gi python3-gi-cairo gir1.2-gtk-4.0 gir1.2-adw-1 make curl ca-certificates
       $SUDO apt-get install -y gir1.2-vte-3.91 || warn "VTE not installed (built-in terminal disabled)" ;;
     *" fedora "*|*" rhel "*|*" centos "*)
-      $SUDO dnf install -y python3 python3-gobject gtk4 libadwaita make curl
+      $SUDO dnf install -y python3 python3-gobject python3-cairo gtk4 libadwaita make curl
       $SUDO dnf install -y vte291-gtk4 || warn "VTE not installed (built-in terminal disabled)" ;;
     *" opensuse "*|*" suse "*)
-      $SUDO zypper --non-interactive install python3 python3-gobject python3-gobject-Gdk typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1 make curl
+      $SUDO zypper --non-interactive install python3 python3-gobject python3-gobject-Gdk python3-gobject-cairo typelib-1_0-Gtk-4_0 typelib-1_0-Adw-1 make curl
       $SUDO zypper --non-interactive install typelib-1_0-Vte-3_91 || warn "VTE not installed (built-in terminal disabled)" ;;
     *" alpine "*)
-      $SUDO apk add python3 py3-gobject3 gtk4.0 libadwaita make curl
+      $SUDO apk add python3 py3-gobject3 py3-cairo gtk4.0 libadwaita make curl
       $SUDO apk add vte3-gtk4 || warn "VTE not installed (built-in terminal disabled)" ;;
     *" void "*)
-      $SUDO xbps-install -Sy python3 python3-gobject gtk4 libadwaita make curl
+      $SUDO xbps-install -Sy python3 python3-gobject python3-cairo gtk4 libadwaita make curl
       $SUDO xbps-install -y vte3-gtk4 || warn "VTE not installed (built-in terminal disabled)" ;;
     *" solus "*)
       $SUDO eopkg install -y python3 python-gobject libgtk-4 libadwaita make ;;

@@ -18,12 +18,10 @@ WSL 2, which is the smoothest today if you already use WSL.
 
 ### 1. Give Berth an engine to talk to
 
-On Windows, Berth connects over TCP (`tcp://localhost:2375`). Pick one:
+**Docker Desktop**: nothing to set up — Berth talks to it through its named pipe (`\\.\pipe\docker_engine`), the
+same way the `docker` command does. Just have Docker Desktop running. Podman Desktop's pipe is found too.
 
-**Docker Desktop** (if you already have it): *Settings → General →* tick **Expose daemon on tcp://localhost:2375
-without TLS** → *Apply & restart*. Berth uses that address by default.
-
-**Docker Engine inside WSL 2** (no Docker Desktop needed). In an Ubuntu WSL terminal:
+**Docker Engine inside WSL 2** (no Docker Desktop needed). Berth reaches it over TCP. In an Ubuntu WSL terminal:
 
 ```sh
 sudo apt install docker.io                    # the Docker Engine
@@ -33,10 +31,10 @@ printf '[Service]\nExecStart=\nExecStart=/usr/bin/dockerd -H fd:// -H tcp://127.
 sudo systemctl daemon-reload && sudo systemctl restart docker
 ```
 
-WSL forwards `localhost` to Windows, so Berth reaches it at `tcp://localhost:2375`. (Needs systemd in WSL: it is on by
+WSL forwards `localhost` to Windows; in Berth pick **Settings → Docker Engine → Other engine** `tcp://localhost:2375`. (Needs systemd in WSL: it is on by
 default in current Ubuntu images; otherwise add `[boot]` `systemd=true` to `/etc/wsl.conf` and run `wsl --shutdown`.)
 
-> Security note: port 2375 has no password. Both setups above listen on `127.0.0.1` only, so only programs on your own PC
+> Security note (WSL setup only): port 2375 has no password. It listens on `127.0.0.1` only, so only programs on your own PC
 > can reach it. Never expose 2375 on a network interface.
 
 ### 2. Install Berth
@@ -92,8 +90,8 @@ Compare the result with `SHA256SUMS.txt` on the release page. (Open-source proje
 
 | Problem | Fix |
 |---|---|
-| "Docker Engine is not running" | Check step 1 of Option A: in PowerShell, `curl.exe http://localhost:2375/_ping` must print `OK`. |
-| Engine elsewhere | **Settings → Docker Engine → Custom address**, e.g. `tcp://192.168.1.20:2375`. |
+| "Docker Engine is not running" | Start Docker Desktop (Berth connects through its pipe as soon as it runs). For an engine in WSL: in PowerShell, `curl.exe http://localhost:2375/_ping` must print `OK`. |
+| Engine elsewhere | **Settings → Docker Engine → Other engine**, e.g. `ssh://you@server` (your SSH keys) or `tcp://192.168.1.20:2375`. |
 | Blurry or tiny text | **Settings → Accessibility → Text size**, or Windows *Display → Scale*. |
 | Windows Defender quarantines a file | A false positive that sometimes hits PyInstaller apps; restore it from *Protection history* and [tell us](https://github.com/subhadeeproy3902/open-docker-app/issues/new/choose). |
 | Something else | [Open an issue](https://github.com/subhadeeproy3902/open-docker-app/issues/new/choose) with the output of `Berth.exe --version`. |

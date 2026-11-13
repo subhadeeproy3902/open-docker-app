@@ -4,12 +4,31 @@ Off-screen:  gtk4-broadwayd :9 &  then
   GDK_BACKEND=broadway BROADWAY_DISPLAY=:9 XDG_CONFIG_HOME=/tmp/x dbus-run-session -- python3 tests/clickall.py
 Dialogs it opens are closed without confirming; only its own throwaway container `berth-clicktest` is acted on."""
 import os
+os.environ.setdefault("BERTH_NO_UPDATE_CHECK", "1")       # tests never ask GitHub for releases
 os.environ.setdefault("BERTH_NO_WELCOME", "1")      # the first-run welcome would cover the window
 import sys
 import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Safety: these suites create, stop and delete containers. They only run against the demo engine
+# (tools/demo/up.sh → tcp://127.0.0.1:23750) unless BERTH_TEST_ANY_ENGINE=1 says otherwise.
+def _guard_engine():
+    import json as _json
+    cfg = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "berth", "settings.json")
+    try:
+        with open(cfg) as _f:
+            eng = _json.load(_f).get("engine", "")
+    except (OSError, ValueError):
+        eng = ""
+    if eng != "tcp://127.0.0.1:23750" and not os.environ.get("BERTH_TEST_ANY_ENGINE"):
+        sys.exit(f"Refusing to run: the configured engine is {eng or 'the default (your real Docker)'}, not the demo "
+                 "engine. Start it with tools/demo/up.sh and point XDG_CONFIG_HOME at a config with "
+                 '"engine": "tcp://127.0.0.1:23750" (or set BERTH_TEST_ANY_ENGINE=1 on purpose).')
+
+
+_guard_engine()
+
 import gi  # noqa: E402
 
 gi.require_version("Gtk", "4.0")
@@ -174,12 +193,21 @@ def scenario(app):
     yield from audit(win, "sidebar", win.get_content().get_child().get_sidebar().get_child())
     win.apply_theme("system")
     # every page: header + body (row cells of real containers are skipped by INTERNAL=ColumnView)
-    for key in ("containers", "images", "volumes", "networks", "logs", "builds", "cache", "resources", "disk", "kubernetes", "settings"):
+    # deny: buttons that change the demo stacks or open a file chooser (no portal off-screen)
+    deny_extra = {"stacks": ("Compose down", "Restart every service", "Pull newer images", "Compose up"),
+                  "backups": ("Restore", "Remove this schedule", "Delete this backup", "Open the folder", "Show in its"),
+                  "send": ("Share files", "Share a folder", "Receive from phone"),
+                  "sharing": ("Stop", "Remove", "Open in browser", "Save HTTPS"),
+                  "databases": ("Start", "Open SQLite")}
+    for key in ("containers", "stacks", "images", "volumes", "networks", "backups", "databases", "sharing", "send",
+                "logs", "builds", "cache", "resources", "disk", "kubernetes", "settings"):
         win.go(key)
         yield 3
         page = win.pages[key]
-        yield from audit(win, f"page:{key}", page, deny=("Stop engine",))
+        yield from audit(win, f"page:{key}", page, deny=("Stop engine",) + deny_extra.get(key, ()))
         close_popups(win)
+        if key == "databases":
+            page.nav.pop_to_tag("list")
 
     # container detail: all header buttons + every tab's own controls (acts only on berth-clicktest)
     cp = win.pages["containers"]

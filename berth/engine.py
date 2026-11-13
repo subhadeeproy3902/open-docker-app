@@ -32,16 +32,123 @@ def socket_path():
         return host[7:]
     if host.startswith("tcp://"):
         return host
-    if os.name == "nt":                       # Docker Desktop on Windows: enable "Expose daemon on tcp://localhost:2375"
-        return "tcp://localhost:2375"
+    if host.startswith(("npipe://", "ssh://")):
+        return host
+    if os.name == "nt":                       # Docker Desktop on Windows listens on a named pipe
+        return WIN_PIPE
     for _label, p in _candidates():
         if os.path.exists(p):
             return p
     return "/var/run/docker.sock"
 
 
+WIN_PIPE = "npipe:////./pipe/docker_engine"
+
+
+def _pipe_name(address):
+    """Docker's npipe:////./pipe/docker_engine address → the Windows pipe path (two backslashes, a dot, pipe…)."""
+    rest = address[len("npipe:"):].lstrip("/")
+    return "\\" + rest.replace("/", "\\") if not rest.startswith(".") else "\\\\" + rest.replace("/", "\\")
+
+
+class _PipeSock:
+    """A Windows named pipe that behaves like the socket http.client and Stream expect.
+
+    Reads happen on a helper thread that starts only after the request has been written — a synchronous pipe handle
+    can't read and write at the same time, and HTTP/1.0 never needs to — so a read can wait with a timeout (no
+    select() on pipes) and close() can cancel a read that is still waiting."""
+
+    def __init__(self, address, timeout=None):
+        import queue
+        name = _pipe_name(address)
+        try:
+            self.f = open(name, "r+b", buffering=0)
+        except FileNotFoundError:
+            raise FileNotFoundError(f"{name} doesn't exist — is Docker Desktop running?")
+        self.q, self.t, self.timeout, self.rest, self._queue = queue.Queue(), None, timeout, b"", queue
+        self.closed = False
+
+    def sendall(self, data):
+        mv = memoryview(data if isinstance(data, (bytes, bytearray)) else bytes(data))
+        while mv:
+            n = self.f.write(mv)
+            mv = mv[n or len(mv):]
+
+    def _pump(self):
+        try:
+            while True:
+                c = self.f.read(65536)
+                self.q.put(c or b"")
+                if not c:
+                    return
+        except (OSError, ValueError):
+            self.q.put(b"")
+
+    def recv(self, n, timeout=-1):
+        if self.rest:
+            c, self.rest = self.rest[:n], self.rest[n:]
+            return c
+        if self.t is None:
+            import threading
+            self.t = threading.Thread(target=self._pump, daemon=True)
+            self.t.start()
+        try:
+            c = self.q.get(timeout=self.timeout if timeout == -1 else timeout)
+        except self._queue.Empty:
+            raise socket.timeout("timed out")
+        if len(c) > n:
+            c, self.rest = c[:n], c[n:]
+        return c
+
+    def recv_into(self, b):
+        c = self.recv(len(b))
+        b[:len(c)] = c
+        return len(c)
+
+    def makefile(self, mode="rb", *a, **kw):
+        import io
+
+        class Raw(io.RawIOBase):
+            def readable(_s):
+                return True
+
+            def readinto(_s, b):
+                return self.recv_into(b)
+        return io.BufferedReader(Raw())
+
+    def settimeout(self, t):
+        self.timeout = t
+
+    def gettimeout(self):
+        return self.timeout
+
+    def shutdown(self, how):
+        pass
+
+    def close(self):
+        if self.closed:
+            return
+        self.closed = True
+        try:                                           # a read still waiting would keep the handle busy
+            import ctypes
+            import msvcrt
+            ctypes.windll.kernel32.CancelIoEx(msvcrt.get_osfhandle(self.f.fileno()), None)
+        except Exception:  # noqa: BLE001 — not Windows, or nothing to cancel
+            pass
+        try:
+            self.f.close()
+        except OSError:
+            pass
+
+
 def _open(address, timeout=None):
-    """Connected socket to the engine: a unix socket path, unix://path, or tcp://host:port."""
+    """Connected socket to the engine: a unix socket path, unix://path, tcp://host:port, ssh://user@host, or a Windows
+    named pipe (npipe:////./pipe/docker_engine)."""
+    if address.startswith("npipe://"):
+        return _PipeSock(address, timeout)
+    if address.startswith("ssh://"):
+        from .sshtunnel import ensure
+        address = ensure(address)                # a local port forwarded to the remote socket
     if address.startswith("tcp://"):
         hostport = address[6:].rstrip("/")
         host, _, port = hostport.rpartition(":")
@@ -60,7 +167,9 @@ def discover():
         if os.path.exists(p) and all(os.path.realpath(p) != os.path.realpath(a) for _l, a in out):
             out.append((label, p))
     if os.name == "nt":
-        out.append(("Docker Desktop (tcp)", "tcp://localhost:2375"))
+        out.append(("Docker Desktop", WIN_PIPE))
+        out.append(("Podman machine", "npipe:////./pipe/podman-machine-default"))
+        out.append(("Docker Desktop (tcp, if exposed)", "tcp://localhost:2375"))
     try:
         import subprocess
         from .util import host
@@ -71,7 +180,7 @@ def discover():
             except ValueError:
                 continue
             ep = c.get("DockerEndpoint", "")
-            addr = ep[7:] if ep.startswith("unix://") else ep if ep.startswith("tcp://") else None
+            addr = ep[7:] if ep.startswith("unix://") else ep if ep.startswith(("tcp://", "npipe://", "ssh://")) else None
             if addr and all(a != addr for _l, a in out):
                 out.append((f"Context: {c.get('Name')}", addr))
     except (OSError, subprocess.SubprocessError):
@@ -106,7 +215,7 @@ def diagnose(address):
 
 
 def docker_host_env(address):
-    return address if address.startswith(("tcp://", "unix://")) else "unix://" + address
+    return address if address.startswith(("tcp://", "unix://", "ssh://", "npipe://")) else "unix://" + address
 
 
 class EngineError(Exception):
@@ -188,6 +297,11 @@ class Stream:
         if self.closed:
             return b""
         try:
+            if isinstance(self.sock, _PipeSock):       # no select() on Windows pipes: a read with a timeout
+                try:
+                    return self.sock.recv(65536, timeout)
+                except socket.timeout:
+                    return None
             r, _, _ = select.select([self.sock], [], [], timeout)
             if not r:
                 return None
@@ -247,6 +361,12 @@ class Engine:
             raise EngineError("Docker Engine is not running", 0)
         except socket.gaierror as e:
             raise EngineError(f"Engine address: {e}", 0)
+        except ConnectionResetError as e:
+            if self.path.startswith("ssh://"):
+                raise EngineError("Signed in over SSH, but the remote Docker socket refused the connection. Is Docker "
+                                  "running there, may your user use it (the docker group), and does the SSH server "
+                                  "allow socket forwarding (AllowStreamLocalForwarding)?", 0)
+            raise EngineError(f"Docker Engine: {e}", 0)
         except (ConnectionRefusedError, socket.timeout, OSError) as e:
             raise EngineError(f"Docker Engine: {e}", 0)
         finally:
@@ -264,7 +384,8 @@ class Engine:
         return Stream(path + _q(query), method, body, self.path)
 
     def alive(self):
-        if not self.path.startswith("tcp://") and not os.path.exists(self.path.replace("unix://", "")):
+        if not self.path.startswith(("tcp://", "ssh://", "npipe://")) and \
+                not os.path.exists(self.path.replace("unix://", "")):
             return False
         try:
             return self.req("GET", "/_ping", timeout=2) == "OK"
@@ -311,10 +432,13 @@ class Engine:
     def stats_once(self, cid):
         return self.req("GET", f"/containers/{cid}/stats", {"stream": False, "one-shot": True}, timeout=10)
 
-    def exec_run(self, cid, cmd, limit=512 * 1024, timeout=20):
-        """Run a non-interactive command in a running container; returns (exit_code, stdout, stderr)."""
-        ex = self.req("POST", f"/containers/{cid}/exec",
-                      body={"AttachStdout": True, "AttachStderr": True, "Tty": False, "Cmd": cmd})
+    def exec_run(self, cid, cmd, limit=512 * 1024, timeout=20, env=None):
+        """Run a non-interactive command in a running container; returns (exit_code, stdout, stderr).
+        env: extra variables (KEY=value) for this command only, e.g. a password, so it never appears in argv."""
+        body = {"AttachStdout": True, "AttachStderr": True, "Tty": False, "Cmd": cmd}
+        if env:
+            body["Env"] = [f"{k}={v}" for k, v in env.items()]
+        ex = self.req("POST", f"/containers/{cid}/exec", body=body)
         st = self.stream(f"/exec/{ex['Id']}/start", method="POST", body={"Detach": False, "Tty": False})
         buf, out, err, waited = b"", b"", b"", 0.0
         try:
@@ -337,6 +461,42 @@ class Engine:
             st.close()
         code = (self.req("GET", f"/exec/{ex['Id']}/json") or {}).get("ExitCode")
         return code, out.decode(errors="replace"), err.decode(errors="replace")
+
+    def exec_to_file(self, cid, cmd, dest, env=None, timeout=3600, progress=None):
+        """Run a command in a container and write its stdout, byte for byte, to `dest` (dumps, exports: no size
+        limit, nothing held in memory). Returns (exit_code, stderr text, bytes written). progress(n) is called
+        as data arrives."""
+        body = {"AttachStdout": True, "AttachStderr": True, "Tty": False, "Cmd": cmd}
+        if env:
+            body["Env"] = [f"{k}={v}" for k, v in env.items()]
+        ex = self.req("POST", f"/containers/{cid}/exec", body=body)
+        st = self.stream(f"/exec/{ex['Id']}/start", method="POST", body={"Detach": False, "Tty": False})
+        buf, err, n, idle = b"", b"", 0, 0.0
+        try:
+            with open(dest, "wb") as f:
+                while True:
+                    c = st.read(1.0)
+                    if c is None:
+                        idle += 1.0
+                        if idle > timeout:
+                            break
+                        continue
+                    if not c:
+                        break
+                    idle = 0.0
+                    frames, buf = demux(buf + c)
+                    for s_, data in frames:
+                        if s_ == 2:
+                            err = (err + data)[-65536:]
+                        else:
+                            f.write(data)
+                            n += len(data)
+                    if progress:
+                        progress(n)
+        finally:
+            st.close()
+        code = (self.req("GET", f"/exec/{ex['Id']}/json") or {}).get("ExitCode")
+        return code, err.decode(errors="replace"), n
 
     # ── images ──
     def images(self):
@@ -362,6 +522,28 @@ class Engine:
         elif ":" in last:
             name, tag = ref.rsplit(":", 1)
         return self.stream("/images/create", {"fromImage": name, "tag": tag}, method="POST")
+
+    def build(self, tar_path, query):
+        """Start a build from a context tar (the classic builder over the API — used when there's no docker CLI).
+        Returns (response, connection); read JSON lines from the response, then close the connection."""
+        size = os.path.getsize(tar_path)
+        c = _Conn(self.path, 3600)
+        f = open(tar_path, "rb")
+        try:
+            c.request("POST", "/build" + _q(query), body=f,
+                      headers={"Content-Type": "application/x-tar", "Content-Length": str(size)})
+            r = c.getresponse()
+        finally:
+            f.close()
+        if r.status >= 400:
+            raw = r.read()
+            c.close()
+            raise EngineError(_message(raw) or f"HTTP {r.status}", r.status)
+        return r, c
+
+    def distribution(self, ref):
+        """What the registry has for this tag right now (asks through the engine, with its credentials)."""
+        return self.req("GET", f"/distribution/{urllib.parse.quote(ref, safe='/:@')}/json", timeout=30)
 
     # ── volumes / networks / prune ──
     def volumes(self):

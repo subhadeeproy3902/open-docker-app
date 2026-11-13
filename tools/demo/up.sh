@@ -8,6 +8,8 @@ docker run -d --name berth-demo-engine --privileged -e DOCKER_TLS_CERTDIR= -p 12
 export DOCKER_HOST=tcp://127.0.0.1:23750
 until docker info >/dev/null 2>&1; do sleep 1; done
 docker compose -p shop -f shop.compose.yaml up -d
+until docker exec shop-db-1 pg_isready -q -h 127.0.0.1 -U postgres 2>/dev/null; do sleep 1; done
+docker exec -i shop-db-1 psql -q -U postgres -d shop < shop-seed.sql >/dev/null
 docker compose -p blog -f blog.compose.yaml up -d
 docker compose -p blog -f blog.compose.yaml stop search
 docker build -q -t demo/hello:1.0 -f Dockerfile.hello . >/dev/null

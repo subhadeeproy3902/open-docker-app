@@ -8,7 +8,8 @@ from gi.repository import Adw, GLib, Gtk
 
 from . import registry, theme
 from .engine import discover
-from .util import IS_LINUX, VERSION, PageHeader, bg, esc, flat_page, fmt_bytes, host
+from .util import (WidePrefs, IS_LINUX, LOG_PATH, VERSION, PageHeader, bg, diagnostic_report, esc, flat_page, fmt_bytes,
+                   host, open_uri)
 
 DAEMON_JSON = "/etc/docker/daemon.json"
 
@@ -22,7 +23,8 @@ class SettingsPage(Gtk.Box):
         self.win, self.store, self.s = win, store, settings
         tv = Adw.ToolbarView(vexpand=True)
         flat_page(tv, PageHeader("Settings", "Appearance, accessibility, the Docker Engine and registries"))
-        pp = Adw.PreferencesPage()
+        pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))                                   # wider, and two columns on big screens
+        self.prefs = pp
         tv.set_content(pp)
         self.append(tv)
 
@@ -86,12 +88,27 @@ class SettingsPage(Gtk.Box):
         if IS_LINUX:                    # StatusNotifierItem trays are a Linux desktop thing
             pp.add(g3)
 
+        gn = Adw.PreferencesGroup(title="Notifications")
+        note = Adw.SwitchRow(title="Tell me when something goes wrong",
+                             subtitle="A desktop notification when a container stops unexpectedly, runs out of memory "
+                                      "or turns unhealthy, and when a backup fails. Shown only while Berth is running "
+                                      "(also in the tray).", active=bool(settings["notify"]))
+        note.connect("notify::active", lambda r, *_: settings.__setitem__("notify", r.get_active()))
+        gn.add(note)
+        upd = Adw.SwitchRow(title="Check for new versions of Berth",
+                            subtitle="Once a day Berth asks GitHub for the latest release — nothing about you or your "
+                                     "containers is sent.", active=bool(settings["update_check"]))
+        upd.connect("notify::active", lambda r, *_: settings.__setitem__("update_check", r.get_active()))
+        if not os.environ.get("FLATPAK_ID"):          # Flathub updates the Flatpak
+            gn.add(upd)
+        pp.add(gn)
+
         self.eng = Adw.PreferencesGroup(title="Docker Engine")
         self.endpoints = []
         self.engine_pick = Adw.ComboRow(title="Connected engine", subtitle="Docker, rootless Docker, Podman or a docker context")
         self.engine_pick.connect("notify::selected", self._pick_engine)
         self.eng.add(self.engine_pick)
-        self.custom = Adw.EntryRow(title="Other engine address (unix socket path or tcp://host:port)", show_apply_button=True)
+        self.custom = Adw.EntryRow(title="Other engine: a socket path, tcp://host:port or ssh://user@host", show_apply_button=True)
         self.custom.connect("apply", lambda e: self._switch(e.get_text().strip()))
         self.eng.add(self.custom)
         self.eng_state = Adw.ActionRow(title="Status")
@@ -111,6 +128,28 @@ class SettingsPage(Gtk.Box):
         if IS_LINUX:                    # elsewhere the engine is configured in Docker Desktop / Colima / OrbStack
             self.eng.add(dj)
         pp.add(self.eng)
+        # local addresses proxy: visible and removable from Settings too (issue #26)
+        self.proxy_g = Adw.PreferencesGroup(title="Local addresses proxy",
+                                            description="One small Caddy container serves every name.localhost "
+                                                        "address. Nothing else runs for it.")
+        self.proxy_row = Adw.ActionRow(title="Proxy", subtitle="Not set up")
+        for text, tip, fn, css in (("Stop", "Stop the proxy; your addresses are kept", lambda: win.pages["sharing"]._stop(),
+                                    None),
+                                   ("Remove", "Remove the proxy container; your addresses are kept for later",
+                                    lambda: win.pages["sharing"]._remove(), "destructive-action")):
+            b = Gtk.Button(label=text, tooltip_text=tip, valign=Gtk.Align.CENTER)
+            if css:
+                b.add_css_class(css)
+            b.connect("clicked", lambda _b, f=fn: (f(), GLib.timeout_add(1500, lambda: self.on_show() and False)))
+            self.proxy_row.add_suffix(b)
+            setattr(self, "proxy_" + text.lower(), b)
+        self.proxy_g.add(self.proxy_row)
+        manage = Adw.ActionRow(title="Addresses, ports and public links", subtitle="Open Ports &amp; sharing",
+                               activatable=True)
+        manage.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
+        manage.connect("activated", lambda *_: win.go("sharing"))
+        self.proxy_g.add(manage)
+        pp.add(self.proxy_g)
 
         self.reg = Adw.PreferencesGroup(title="Registries", description="Sign in to push to and pull private images from "
                                                                         "Docker Hub or another registry. Uses docker's own credential store.")
@@ -125,12 +164,28 @@ class SettingsPage(Gtk.Box):
         ab.add_suffix(Gtk.Image(icon_name="go-next-symbolic"))
         ab.connect("activated", lambda *_: win.get_application().activate_action("about", None))
         about.add(ab)
+        diag = Adw.ActionRow(title="Copy diagnostic report", activatable=True,
+                             subtitle="Version, system, engine and the latest errors — paste it into an issue or chat")
+        diag.add_suffix(Gtk.Image(icon_name="edit-copy-symbolic"))
+        diag.connect("activated", lambda *_: self._copy_diag())
+        about.add(diag)
+        logs = Adw.ActionRow(title="Open the log folder", activatable=True, subtitle=LOG_PATH)
+        logs.add_suffix(Gtk.Image(icon_name="folder-open-symbolic"))
+        logs.connect("activated", lambda *_: open_uri("file://" + os.path.dirname(LOG_PATH)))
+        about.add(logs)
         pp.add(about)
         store.connect("engine", lambda *_: self.get_mapped() and self.on_show())   # refresh only while visible
 
     def _a11y(self, key, value):
         self.s[key] = value
         theme.apply_accessibility(self.win, self.s)
+
+    def on_size(self, n):
+        self.prefs.on_size(n)
+
+    def _copy_diag(self):
+        self.get_clipboard().set(diagnostic_report(self.store))
+        self.win.toast("Diagnostic report copied")
 
     # ── engines ──
     def _fill_engines(self):
@@ -206,6 +261,14 @@ class SettingsPage(Gtk.Box):
         d.present(self.win)
 
     def on_show(self):
+        from . import sharing
+        p = sharing.proxy(self.store.containers)
+        n = len(self.s["routes"] or [])
+        self.proxy_row.set_subtitle(("Running" if p.get("State") == "running" else "Stopped") + f" · {n} address"
+                                    + ("es" if n != 1 else "") if p else "Not set up — it starts when you add an address")
+        # only what can be done: nothing to stop or remove before the proxy exists, nothing to stop when stopped
+        self.proxy_stop.set_visible(bool(p) and p.get("State") == "running")
+        self.proxy_remove.set_visible(bool(p))
         self._fill_engines()
         self._fill_registries()
         up = bool(self.store.up)

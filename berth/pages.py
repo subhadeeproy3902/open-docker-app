@@ -1,6 +1,7 @@
 """Images, Volumes, Networks, Build cache, Resource usage and Disk usage pages."""
 import json
 import os
+import re
 import shlex
 import time
 
@@ -10,8 +11,8 @@ from . import charts
 from .cli import CommandDialog, run_capture
 from .files import FileBrowser, clone_volume, export_volume, import_volume, start_volume_helper, stop_volume_helper
 from .scan import ScanDialog
-from .util import (Row, ago, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
-                   fmt_rate, icon_button, label, labels, ordering, thread, detail_tag, push_detail,
+from .util import (follow_content, release_on_leave, Row, ago, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
+                   fmt_rate, icon_button, label, labels, ordering, thread, detail_tag, push_detail, WidePrefs,
                    toolbar_row, PageHeader, flat_page, table_card)
 
 
@@ -61,6 +62,22 @@ def ask_text(win, heading, body, initial, ok, then):
     d.present(win)
 
 
+def row_menu(holder, items):
+    """A ⋮ menu for a table row. items: [(label, fn(row))]; holder.row is the row the cell shows right now."""
+    menu = Gio.Menu()
+    ag = Gio.SimpleActionGroup()
+    for i, (lbl, fn) in enumerate(items):
+        menu.append(lbl, f"row.a{i}")
+        a = Gio.SimpleAction.new(f"a{i}", None)
+        a.connect("activate", lambda *_a, f=fn: holder.row and f(holder.row))
+        ag.add_action(a)
+    mb = Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=menu, tooltip_text="More actions",
+                        valign=Gtk.Align.CENTER)
+    mb.add_css_class("flat")
+    mb.insert_action_group("row", ag)
+    return mb
+
+
 class TablePage(Gtk.Box):
     """Header (title + search + buttons) over a sortable, filterable ColumnView."""
     title = icon = ""
@@ -91,7 +108,7 @@ class TablePage(Gtk.Box):
         self.view.connect("activate", lambda _v, pos: self.on_activate(self.sorted.get_item(pos)))
         self.build_columns()
         self.stack = Gtk.Stack()
-        self.stack.add_named(table_card(self.view), "list")
+        self.stack.add_named(table_card(self.view, fit=True), "list")
         self.stack.add_named(Adw.StatusPage(title=self.empty_text[0], description=self.empty_text[1],
                                             icon_name=self.icon), "empty")
         sp = Adw.Spinner(halign=Gtk.Align.CENTER, valign=Gtk.Align.CENTER, width_request=32, height_request=32)
@@ -169,7 +186,25 @@ class TablePage(Gtk.Box):
         return c
 
     def set_rows(self, rows, sort_col=None):
-        self.model.splice(0, self.model.get_n_items(), rows)
+        """Show these rows. Existing Row objects are updated in place (same key → same object), so a refresh every
+        30 s doesn't create a fresh set of rows and cells each time — they used to pile up all day (memory leak)."""
+        old = {self.model.get_item(i).key: self.model.get_item(i) for i in range(self.model.get_n_items())}
+        merged = []
+        for r in rows:
+            o = old.get(r.key)
+            if o is not None and o.kind == r.kind:
+                o.data = r.data
+                o.extra.update(r.extra)
+                merged.append(o)
+            else:
+                merged.append(r)
+        if [r.key for r in merged] == list(old) and all(a is b for a, b in zip(merged, old.values())):
+            for o in merged:
+                o.emit("changed")
+            if self.view.get_sorter():
+                self.view.get_sorter().changed(Gtk.SorterChange.DIFFERENT)
+        else:
+            self.model.splice(0, self.model.get_n_items(), merged)
         self.loaded = True
         self.stack.set_visible_child_name("list" if rows else "empty")
         if sort_col is not None and not self.view.get_sorter().get_primary_sort_column():
@@ -187,11 +222,164 @@ class TablePage(Gtk.Box):
 
 
 # ───────────────────────────── Images ─────────────────────────────
+UPDATES_STATE = os.path.join(GLib.get_user_state_dir(), "berth", "image-updates.json")
+
+
+def _load_updates():
+    try:
+        with open(UPDATES_STATE) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def _save_updates(d):
+    try:
+        os.makedirs(os.path.dirname(UPDATES_STATE), exist_ok=True)
+        with open(UPDATES_STATE, "w") as f:
+            json.dump(d, f)
+    except OSError:
+        pass
+
+
+class BuildDialog(Adw.Dialog):
+    """Build an image from a folder: pick the folder, the Dockerfile and a name; see the log as it builds."""
+
+    def __init__(self, win, store):
+        super().__init__(title="Build an image", content_width=560)
+        self.win, self.store, self.ctx, self.df = win, store, None, None
+        tv = Adw.ToolbarView()
+        hb = Adw.HeaderBar(show_end_title_buttons=False, show_start_title_buttons=False)
+        cancel = Gtk.Button(label="Cancel")
+        cancel.connect("clicked", lambda *_: self.close())
+        hb.pack_start(cancel)
+        self.go_btn = Gtk.Button(label="Build", sensitive=False)
+        self.go_btn.add_css_class("suggested-action")
+        self.go_btn.connect("clicked", lambda *_: self._build())
+        hb.pack_end(self.go_btn)
+        tv.add_top_bar(hb)
+        self.stack = Gtk.Stack(vhomogeneous=False, interpolate_size=True)
+        pp = Adw.PreferencesPage()
+        g = Adw.PreferencesGroup()
+        self.ctx_row = Adw.ActionRow(title="Folder", subtitle="The build context — files the Dockerfile can COPY",
+                                     activatable=True)
+        self.ctx_row.add_suffix(Gtk.Image(icon_name="folder-open-symbolic"))
+        self.ctx_row.connect("activated", lambda *_: self._pick(True))
+        self.df_row = Adw.ActionRow(title="Dockerfile", subtitle="Dockerfile in the folder", activatable=True)
+        self.df_row.add_suffix(Gtk.Image(icon_name="document-open-symbolic"))
+        self.df_row.connect("activated", lambda *_: self._pick(False))
+        self.tag = Adw.EntryRow(title="Name and tag, e.g. myapp:1.0")
+        self.tag.connect("changed", lambda *_: self._sync())
+        for w in (self.ctx_row, self.df_row, self.tag):
+            g.add(w)
+        pp.add(g)
+        more = Adw.PreferencesGroup()
+        ex = Adw.ExpanderRow(title="Options", subtitle="Build arguments, target stage, cache")
+        self.args = Adw.EntryRow(title="Build arguments  KEY=value, comma separated")
+        self.target = Adw.EntryRow(title="Target stage (empty: the last one)")
+        self.nocache = Adw.SwitchRow(title="Don't use the cache", subtitle="Every step runs again")
+        self.pull = Adw.SwitchRow(title="Pull newer base images first")
+        for w in (self.args, self.target, self.nocache, self.pull):
+            ex.add_row(w)
+        more.add(ex)
+        pp.add(more)
+        self.stack.add_named(pp, "form")
+        self.log = Gtk.TextView(editable=False, monospace=True, wrap_mode=Gtk.WrapMode.WORD_CHAR, top_margin=10,
+                                bottom_margin=10, left_margin=12, right_margin=12)
+        self.log_sw = Gtk.ScrolledWindow(child=self.log, vexpand=True, min_content_height=360)
+        self.stack.add_named(self.log_sw, "log")
+        tv.set_content(self.stack)
+        self.set_child(tv)
+        follow_content(self, 560)
+
+    def _pick(self, folder):
+        d = Gtk.FileDialog(title="Build folder" if folder else "Dockerfile", accept_label="Choose")
+        if self.ctx:
+            try:
+                d.set_initial_folder(Gio.File.new_for_path(self.ctx))
+            except GLib.Error:
+                pass
+
+        def done(dlg, res):
+            try:
+                f = dlg.select_folder_finish(res) if folder else dlg.open_finish(res)
+            except GLib.Error:
+                return
+            p = f.get_path() if f else None
+            if not p:
+                return
+            if folder:
+                self.ctx = p
+                self.ctx_row.set_subtitle(esc(p))
+                if not self.tag.get_text().strip():
+                    self.tag.set_text(re.sub(r"[^a-z0-9._-]+", "-", os.path.basename(p).lower()).strip("-.") + ":latest")
+                if not self.df:
+                    found = next((n for n in ("Dockerfile", "dockerfile", "Containerfile") if
+                                  os.path.exists(os.path.join(p, n))), None)
+                    self.df_row.set_subtitle(esc(found) if found else "No Dockerfile in this folder — pick one")
+                    self.df = os.path.join(p, found) if found else None
+            else:
+                self.df = p
+                self.df_row.set_subtitle(esc(p))
+                if not self.ctx:
+                    self.ctx = os.path.dirname(p)
+                    self.ctx_row.set_subtitle(esc(self.ctx))
+            self._sync()
+        (d.select_folder if folder else d.open)(self.win, None, done)
+
+    def _sync(self):
+        self.go_btn.set_sensitive(bool(self.ctx and self.df and self.tag.get_text().strip()))
+
+    def _build(self):
+        from . import build as bld
+        if getattr(self, "finished", False):
+            self.close()
+            return
+        tag = self.tag.get_text().strip()
+        args = dict(kv.strip().partition("=")[::2] for kv in self.args.get_text().split(",") if "=" in kv)
+        opts = dict(args=args, target=self.target.get_text().strip(), nocache=self.nocache.get_active(),
+                    pull=self.pull.get_active())
+        if bld.has_cli():                     # BuildKit through the docker CLI, with its live log
+            from .cli import CommandDialog
+            argv = bld.cli_argv(self.ctx, self.df, tag, **opts)
+            self.close()
+            CommandDialog(self.win, f"Build {tag}", argv, cwd=self.ctx,
+                          on_done=lambda ok: (self.store.refresh("images"),
+                                              self.win.toast(f"Built {tag}" if ok else f"Build of {tag} failed"))
+                          ).present(self.win)
+            return
+        self.go_btn.set_sensitive(False)
+        self.stack.set_visible_child_name("log")
+        buf = self.log.get_buffer()
+
+        def line(t):
+            GLib.idle_add(lambda: (buf.insert(buf.get_end_iter(), t), self._scroll()) and False)
+
+        def done(_iid):
+            buf.insert(buf.get_end_iter(), f"\n✓ Built {tag}\n")
+            self.store.refresh("images")
+            self.win.toast(f"Built {tag}")
+            self.finished = True
+            self.go_btn.set_label("Close")
+            self.go_btn.set_sensitive(True)
+
+        def fail(e):
+            buf.insert(buf.get_end_iter(), f"\n✗ {e}\n")
+            self.win.toast("Build failed — see the log")
+        bg(lambda: bld.api_build(self.store.engine, self.ctx, self.df, tag, on_line=line, **opts), done=done,
+           error=fail)
+
+    def _scroll(self):
+        adj = self.log_sw.get_vadjustment()
+        adj.set_value(adj.get_upper())
+
+
 class ImagesPage(TablePage):
     title, icon = "Images", "drive-harddisk-symbolic"
     empty_text = ("No images", "Pull one from Docker Hub with the Pull button.")
 
     def __init__(self, win, store, settings):
+        self.updates = _load_updates()
         super().__init__(win, store, settings)
         store.connect("images", lambda *_: self._fill())
         store.connect("containers", lambda *_: self._fill() if store.images is not None else None)
@@ -210,7 +398,15 @@ class ImagesPage(TablePage):
         ag.add_action(a)
         self.insert_action_group("img", ag)
         load = icon_button("document-open-symbolic", "Load an image from a .tar file", self._load_file, css=())
-        return [mb, load, pull]
+        self.upd_btn = Gtk.Button(label="Check for updates", tooltip_text="Ask the registries whether the tags you "
+                                  "pulled have newer versions")
+        self.upd_btn.connect("clicked", lambda *_: self.check_updates())
+        self.upd_all = Gtk.Button(label="Update all", visible=False,
+                                  tooltip_text="Pull every newer version and restart the containers that use them")
+        self.upd_all.connect("clicked", lambda *_: self._update_all())
+        build = Gtk.Button(label="Build…", tooltip_text="Build an image from a folder with a Dockerfile")
+        build.connect("clicked", lambda *_: BuildDialog(self.win, self.store).present(self.win))
+        return [mb, load, self.upd_all, self.upd_btn, build, pull]
 
     def _load_file(self):
         def go(path):
@@ -237,6 +433,11 @@ class ImagesPage(TablePage):
 
         def status_upd(w, r):
             used = r.data["used"]
+            if self.updates.get(r.data["ref"]):
+                w.set_text("Update")
+                w.set_css_classes(["status-pill", "accent"])
+                w.set_tooltip_text("A newer version of this tag is in the registry — ⋮ → Update")
+                return
             w.set_text("In use" if used else "Dangling" if r.data["repo"] == "<none>" else "Unused")
             w.set_css_classes(["status-pill", "ok" if used else "warn" if r.data["repo"] == "<none>" else "muted"])
             w.set_tooltip_text("\n".join(used) if used else None)
@@ -247,12 +448,18 @@ class ImagesPage(TablePage):
             box.run = icon_button("media-playback-start-symbolic", "Run")
             box.pull = icon_button("folder-download-symbolic", "Pull again (update)")
             box.trash = icon_button("user-trash-symbolic", "Delete")
-            for w in (box.run, box.pull, box.trash):
+            from . import quick
+            box.row = None
+            box.more = row_menu(box, [
+                ("Update (pull and restart its containers)…", lambda r: self.update_image(r.data)),
+                ("Rename…", lambda r: quick.rename_image(self.win, self.store, r.data["ref"], r.data["id"])),
+                ("Run…", lambda r: RunDialog(self.win, self.store, r.data).present(self.win)),
+                ("Open details", lambda r: self.on_activate(r))])
+            for w in (box.run, box.pull, box.more, box.trash):
                 box.append(w)
             box.run.connect("clicked", lambda *_: box.row and RunDialog(self.win, self.store, box.row.data).present(self.win))
             box.pull.connect("clicked", lambda *_: box.row and PullDialog(self.win, self.store, box.row.data["ref"]).present(self.win))
             box.trash.connect("clicked", lambda *_: box.row and self._delete(box.row))
-            box.row = None
             return box
 
         def act_upd(box, r):
@@ -260,13 +467,14 @@ class ImagesPage(TablePage):
             box.trash.set_sensitive(not r.data["used"])
             box.trash.set_tooltip_text("In use by " + ", ".join(r.data["used"]) if r.data["used"] else "Delete")
             box.pull.set_sensitive(r.data["repo"] != "<none>")
-        self.widget_column("", act_setup, act_upd, width=118)
+        self.widget_column("", act_setup, act_upd, width=150)
 
     def on_show(self):
         if self.store.images is None:
             self.store.refresh("images")
         else:
             self._fill()
+        self._daily_check()
 
     def match(self, row, q):
         return q in row.data["repo"].lower() or q in row.data["tag"].lower() or q in row.data["id"]
@@ -288,7 +496,113 @@ class ImagesPage(TablePage):
                     "created": im.get("Created", 0), "size": im.get("Size", 0), "used": used.get(im["Id"], [])}))
         self.set_rows(rows, self.c_created)
         total = sum(im.get("Size", 0) for im in imgs)
-        self.wtitle.set_subtitle(f"{len(imgs)} images · {fmt_bytes(total)} (shared layers counted once on disk)")
+        n_upd = sum(1 for r in rows if self.updates.get(r.data["ref"]))
+        self.wtitle.set_subtitle(f"{len(imgs)} images · {fmt_bytes(total)} (shared layers counted once on disk)"
+                                 + (f" · {n_upd} with a newer version" if n_upd else ""))
+        if hasattr(self, "upd_all"):
+            self.upd_all.set_visible(n_upd > 0)
+            self.upd_all.set_label(f"Update all ({n_upd})")
+
+    # ── newer versions ──
+    def _daily_check(self):
+        if os.environ.get("BERTH_NO_UPDATE_CHECK"):
+            return
+        if time.time() - self.updates.get("_checked", 0) > 86400 and self.store.images:
+            self.check_updates(quiet=True)          # once a day, in the background
+
+    def check_updates(self, quiet=False):
+        from . import build as bld
+        if not self.store.images:
+            return
+        if hasattr(self, "upd_btn"):
+            self.upd_btn.set_sensitive(False)
+            self.upd_btn.set_label("Checking…")
+
+        def done(res):
+            res["_checked"] = time.time()
+            self.updates = res
+            _save_updates(res)
+            self.upd_btn.set_sensitive(True)
+            self.upd_btn.set_label("Check for updates")
+            n = sum(1 for k, v in res.items() if v is True)
+            unknown = sum(1 for k, v in res.items() if v is None and not k.startswith("_"))
+            if not quiet or n:
+                self.win.toast(f"{n} image{'s have' if n != 1 else ' has'} a newer version" if n else
+                               "Every pulled image is up to date" + (f" ({unknown} built here or not checkable)"
+                                                                     if unknown else ""))
+            self._fill()
+
+        def fail(e):
+            self.upd_btn.set_sensitive(True)
+            self.upd_btn.set_label("Check for updates")
+            if not quiet:
+                self.win.toast(f"Couldn't check: {e}")
+        bg(bld.check_updates, self.store.engine, list(self.store.images), done=done, error=fail)
+
+    def _users(self, ref, image_id):
+        return [c for c in self.store.containers if c.get("Image") == ref or c.get("ImageID") == image_id]
+
+    def update_image(self, d):
+        if d["repo"] == "<none>":
+            self.win.toast("This image has no tag to update")
+            return
+        users = self._users(d["ref"], d["id"])
+        names = ", ".join(cname(c) for c in users[:8]) + (f" and {len(users) - 8} more" if len(users) > 8 else "")
+        body = (f"Berth pulls the newest <b>{esc(d['ref'])}</b>" +
+                (f", then recreates {esc(names)} with it — same settings, ports, volumes and networks. Running "
+                 "ones restart, which takes a few seconds." if users else ". No container uses it."))
+        confirm(self.win, f"Update {d['ref']}?", body, "Update", lambda: self._do_update([(d["ref"], users)]))
+
+    def _update_all(self):
+        todo = []
+        for r in self._rows_now():
+            if self.updates.get(r.data["ref"]):
+                todo.append((r.data["ref"], self._users(r.data["ref"], r.data["id"])))
+        if not todo:
+            return
+        n = sum(len(u) for _r, u in todo)
+        confirm(self.win, f"Update {len(todo)} images?", f"Each newer version is pulled; {n} containers that use "
+                "them are recreated with the same settings.", "Update all", lambda: self._do_update(todo))
+
+    def _rows_now(self):
+        return [self.model.get_item(i) for i in range(self.model.get_n_items())]
+
+    def _do_update(self, todo):
+        from .edit import recreate_same
+        e = self.store.engine
+        self.win.toast(f"Updating {len(todo)} image{'s' if len(todo) > 1 else ''}…")
+
+        def work():
+            msgs = []
+            for ref, users in todo:
+                st = e.pull(ref)
+                try:
+                    tail = b""
+                    while (c := st.read(5.0)) != b"":
+                        if c:
+                            tail = (tail + c)[-4096:]
+                finally:
+                    st.close()
+                if b'"error"' in tail:
+                    msgs.append(f"{ref}: pull failed")
+                    continue
+                for c in users:
+                    if c.get("Labels", {}).get("com.docker.compose.project"):
+                        pass                     # Compose containers keep their labels, so Compose still owns them
+                    try:
+                        recreate_same(e, c["Id"])
+                    except Exception as ex:
+                        msgs.append(f"{cname(c)}: {ex}")
+            return msgs
+
+        def done(msgs):
+            for ref, _u in todo:
+                self.updates[ref] = False
+            _save_updates(self.updates)
+            self.store.refresh("images")
+            self.store.refresh("containers")
+            self.win.toast("Updated" + (f" — {msgs[0][:140]}" if msgs else ""))
+        bg(work, done=done, error=lambda ex: self.win.toast(f"Update failed: {ex}"))
 
     def _delete(self, row):
         d = row.data
@@ -329,6 +643,10 @@ class ImageDetail(Adw.NavigationPage):
         hb = Adw.HeaderBar()
         tagb = Gtk.Button(label="Tag…", tooltip_text="Give this image another name:tag")
         tagb.connect("clicked", lambda *_: self._tag())
+        renb = Gtk.Button(label="Rename…", tooltip_text="Change this image's name:tag (the old name is removed)")
+        renb.connect("clicked", lambda *_: __import__("berth.quick", fromlist=["x"]).rename_image(
+            page.win, page.store, d["ref"], d["id"]))
+        self._renb = renb
         scan = Gtk.Button(label="Scan", tooltip_text="Check for known vulnerabilities (Trivy)")
         scan.connect("clicked", lambda *_: ScanDialog(page.win, page.store, d["ref"]).present(page.win))
         more = Gio.Menu()
@@ -343,13 +661,15 @@ class ImageDetail(Adw.NavigationPage):
         self.insert_action_group("imgd", ag)
         hb.pack_end(mb)
         hb.pack_end(tagb)
+        if d["repo"] != "<none>":
+            hb.pack_end(self._renb)
         hb.pack_end(scan)
         run = Gtk.Button(label="Run")
         run.add_css_class("suggested-action")
         run.connect("clicked", lambda *_: RunDialog(page.win, page.store, d).present(page.win))
         hb.pack_end(run)
         tv.add_top_bar(hb)
-        self.pp = Adw.PreferencesPage()
+        self.pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))
         tv.set_content(self.pp)
         self.set_child(tv)
         bg(self._load, done=self._fill, error=lambda e: page.win.toast(str(e)))
@@ -415,7 +735,7 @@ class ImageDetail(Adw.NavigationPage):
 
 class PullDialog(Adw.Dialog):
     def __init__(self, win, store, ref=None):
-        super().__init__(title="Pull an image", content_width=560, content_height=560)
+        super().__init__(title="Pull an image", content_width=560)
         self.win, self.store = win, store
         tv = Adw.ToolbarView()
         tv.add_top_bar(Adw.HeaderBar())
@@ -432,11 +752,23 @@ class PullDialog(Adw.Dialog):
         box.append(row)
         self.progress = Gtk.ProgressBar(show_text=True, visible=False)
         box.append(self.progress)
+        # before searching: one-click popular images instead of an empty box
+        self.popular = Adw.WrapBox(child_spacing=6, line_spacing=6)
+        self.popular.append(label("Popular:", css=["caption", "dim-label"], valign=Gtk.Align.CENTER))
+        for name in ("nginx", "postgres", "redis", "node", "python", "mysql", "mongo", "alpine", "ubuntu", "caddy"):
+            chip = Gtk.Button(label=name, tooltip_text=f"Search Docker Hub for {name}")
+            chip.add_css_class("pill-chip")
+            chip.connect("clicked", lambda _b, n=name: (self.entry.set_text(n), self.entry.grab_focus()))
+            self.popular.append(chip)
+        box.append(self.popular)
         self.results = Gtk.ListBox(selection_mode=Gtk.SelectionMode.NONE)
         self.results.add_css_class("boxed-list")
-        box.append(Gtk.ScrolledWindow(child=self.results, vexpand=True))
+        self.results_sw = Gtk.ScrolledWindow(child=self.results, propagate_natural_height=True, max_content_height=440,
+                                             hscrollbar_policy=Gtk.PolicyType.NEVER, visible=False)
+        box.append(self.results_sw)
         tv.set_content(box)
         self.set_child(tv)
+        follow_content(self, 560)
         self._gen = 0
         if ref:
             self.entry.set_text(ref)
@@ -446,7 +778,9 @@ class PullDialog(Adw.Dialog):
         q = e.get_text().strip()
         self._gen += 1
         gen = self._gen
+        self.popular.set_visible(not q)
         if len(q) < 2 or ":" in q or "/" in q and "." in q.split("/")[0]:
+            self.results_sw.set_visible(False)
             return
 
         def done(res):
@@ -454,7 +788,9 @@ class PullDialog(Adw.Dialog):
                 return
             while (ch := self.results.get_first_child()):
                 self.results.remove(ch)
-            for r in res or []:
+            self.results_sw.set_visible(bool(res))
+            res = sorted(res or [], key=lambda r: (not r.get("is_official"), -int(r.get("star_count") or 0)))
+            for r in res:
                 name = r.get("name", "")
                 row = Adw.ActionRow(title=esc(name), subtitle=esc((r.get("description") or "")[:140]), activatable=True)
                 if r.get("is_official"):
@@ -462,6 +798,8 @@ class PullDialog(Adw.Dialog):
                 row.add_suffix(Gtk.Label(label=f"★ {r.get('star_count', 0)}", css_classes=["dim-label", "numeric"]))
                 row.connect("activated", lambda _r, n=name: (self.entry.set_text(n), self._pull(n)))
                 self.results.append(row)
+            # the dialog keeps its first size: ask for room for the rows (up to about six, then it scrolls)
+            self.results_sw.set_min_content_height(min(400, 66 * len(res or [])))
         GLib.timeout_add(350, lambda: gen == self._gen and bg(self.store.engine.search, q, done=done,
                                                               error=lambda e: None) and False)
 
@@ -527,11 +865,13 @@ class PullDialog(Adw.Dialog):
 
 
 class RunDialog(Adw.Dialog):
-    """Docker Desktop's 'Run' with optional settings: name, ports, env, volumes, restart policy, command."""
+    """Run an image with every option Docker offers that people actually use: the common ones on top, the rest in
+    folded sections (network, resources, health check, security, labels)."""
 
     def __init__(self, win, store, image):
-        super().__init__(title=f"Run {image['ref']}", content_width=520)
+        super().__init__(title=f"Run {image['ref']}", content_width=560)
         self.win, self.store, self.image = win, store, image
+        self.env_file = {}
         tv = Adw.ToolbarView()
         hb = Adw.HeaderBar(show_end_title_buttons=False, show_start_title_buttons=False)
         cancel = Gtk.Button(label="Cancel")
@@ -543,43 +883,159 @@ class RunDialog(Adw.Dialog):
         hb.pack_end(self.run_btn)
         tv.add_top_bar(hb)
         pp = Adw.PreferencesPage()
-        g = Adw.PreferencesGroup(title="Optional settings")
+        g = Adw.PreferencesGroup(title="Basics", description="All optional — empty fields use the image's defaults.")
         self.name = Adw.EntryRow(title="Container name")
         self.ports = Adw.EntryRow(title="Ports  host:container, comma separated")
+        self.local = Adw.SwitchRow(title="Ports open on this computer only",
+                                   subtitle="Other devices on your network can't reach them — the safe choice for "
+                                            "databases", active=False)
         self.env = Adw.EntryRow(title="Environment  KEY=value, comma separated")
+        self.envf = Adw.ActionRow(title="Environment file", subtitle="A .env file with KEY=value lines", activatable=True)
+        self.envf.add_suffix(Gtk.Image(icon_name="document-open-symbolic"))
+        self.envf.connect("activated", lambda *_: self._pick_env())
         self.vols = Adw.EntryRow(title="Volumes  name-or-path:/container/path, comma separated")
-        self.cmd = Adw.EntryRow(title="Command (leave empty for the image default)")
-        self.restart = Adw.ComboRow(title="Restart policy", model=Gtk.StringList.new(["no", "unless-stopped", "always", "on-failure"]))
-        for w in (self.name, self.ports, self.env, self.vols, self.cmd, self.restart):
+        self.cmd = Adw.EntryRow(title="Command (empty: the image's default)")
+        self.restart = Adw.ComboRow(title="Restart policy",
+                                    model=Gtk.StringList.new(["no", "unless-stopped", "always", "on-failure"]))
+        self.autorm = Adw.SwitchRow(title="Remove it when it stops", subtitle="For one-off tasks")
+        for w in (self.name, self.ports, self.local, self.env, self.envf, self.vols, self.cmd, self.restart, self.autorm):
             g.add(w)
         pp.add(g)
+
+        more = Adw.PreferencesGroup(title="More options")
+        net = Adw.ExpanderRow(title="Network", subtitle="Which network, its name on it")
+        nets = ["bridge (default)"] + sorted(n["Name"] for n in (store.networks or []) if n["Name"] not in
+                                             ("bridge", "none")) + ["none"]
+        self.net_names = ["bridge"] + nets[1:]
+        self.net = Adw.ComboRow(title="Network", model=Gtk.StringList.new(nets))
+        self.hostname = Adw.EntryRow(title="Hostname")
+        self.alias = Adw.EntryRow(title="Also reachable as (network alias)")
+        for w in (self.net, self.hostname, self.alias):
+            net.add_row(w)
+        more.add(net)
+        res = Adw.ExpanderRow(title="Resources", subtitle="Memory and CPU limits, GPUs")
+        self.mem = Adw.SpinRow(title="Memory limit (MB)", subtitle="0 = no limit",
+                               adjustment=Gtk.Adjustment(lower=0, upper=1048576, step_increment=128))
+        self.cpu = Adw.SpinRow(title="CPU limit (cores)", subtitle="0 = no limit", digits=1,
+                               adjustment=Gtk.Adjustment(lower=0, upper=256, step_increment=0.5))
+        self.gpu = Adw.SwitchRow(title="Give it every GPU", subtitle="Needs the NVIDIA container toolkit (or similar)")
+        for w in (self.mem, self.cpu, self.gpu):
+            res.add_row(w)
+        more.add(res)
+        hc = Adw.ExpanderRow(title="Health check", subtitle="A command that says whether it works")
+        self.hcmd = Adw.EntryRow(title="Command, e.g. curl -f http://localhost/ || exit 1")
+        self.hint = Adw.SpinRow(title="Every (seconds)", adjustment=Gtk.Adjustment(value=30, lower=1, upper=3600,
+                                                                                   step_increment=5))
+        self.hret = Adw.SpinRow(title="Unhealthy after failures", adjustment=Gtk.Adjustment(value=3, lower=1, upper=50,
+                                                                                            step_increment=1))
+        for w in (self.hcmd, self.hint, self.hret):
+            hc.add_row(w)
+        more.add(hc)
+        sec = Adw.ExpanderRow(title="Advanced", subtitle="Entrypoint, user, folder, security")
+        self.entry = Adw.EntryRow(title="Entrypoint (empty: the image's)")
+        self.user = Adw.EntryRow(title="Run as user, e.g. 1000:1000")
+        self.workdir = Adw.EntryRow(title="Working folder")
+        self.tty = Adw.SwitchRow(title="Keep it open for a terminal", subtitle="Interactive TTY — for images that run a "
+                                                                              "shell, like ubuntu or alpine")
+        self.use_init = Adw.SwitchRow(title="Use an init process", subtitle="Reaps zombie processes, forwards signals")
+        self.ro = Adw.SwitchRow(title="Read-only file system", subtitle="Only volumes can be written")
+        self.caps = Adw.EntryRow(title="Extra capabilities, e.g. NET_ADMIN")
+        self.privileged = Adw.SwitchRow(title="Privileged", subtitle="Full access to this computer. Only for tools that need it.")
+        self.labels = Adw.EntryRow(title="Labels  key=value, comma separated")
+        for w in (self.entry, self.user, self.workdir, self.tty, self.use_init, self.ro, self.caps, self.privileged, self.labels):
+            sec.add_row(w)
+        more.add(sec)
+        pp.add(more)
         tv.set_content(pp)
         self.set_child(tv)
-        bg(store.engine.image_inspect, image["id"], done=self._prefill, error=lambda e: None)
+        if image.get("id"):
+            bg(store.engine.image_inspect, image["id"], done=self._prefill, error=lambda e: None)
 
     def _prefill(self, ins):
         exposed = list(((ins or {}).get("Config") or {}).get("ExposedPorts") or {})
         if exposed and not self.ports.get_text():
             self.ports.set_text(", ".join(f"{p.split('/')[0]}:{p.split('/')[0]}" for p in exposed))
 
-    def _run(self):
+    def _pick_env(self):
+        d = Gtk.FileDialog(title="Environment file", accept_label="Use")
+
+        def done(dlg, res):
+            try:
+                f = dlg.open_finish(res)
+            except GLib.Error:
+                return
+            try:
+                self.env_file = parse_env_file(f.get_path())
+            except OSError as e:
+                self.win.toast(f"Couldn't read it: {e}")
+                return
+            self.envf.set_subtitle(esc(f"{os.path.basename(f.get_path())} · {len(self.env_file)} variables"))
+        d.open(self.win, None, done)
+
+    def config(self):
+        """The create request for the engine (raises ValueError when a field doesn't make sense)."""
         split = lambda s: [x.strip() for x in s.split(",") if x.strip()]
         expose, bind = {}, {}
+        ip = "127.0.0.1" if self.local.get_active() else ""
+        for p in split(self.ports.get_text()):
+            host, _, ctr = p.rpartition(":")
+            if not ctr.split("/")[0].isdigit() or (host and not host.isdigit()):
+                raise ValueError(f"“{p}” isn't host:container, e.g. 8080:80")
+            ctr = ctr if "/" in ctr else ctr + "/tcp"
+            expose[ctr] = {}
+            bind.setdefault(ctr, []).append({"HostIp": ip, "HostPort": host or ctr.split("/")[0]})
+        env = dict(self.env_file)
+        for kv in split(self.env.get_text()):
+            k, _, v = kv.partition("=")
+            env[k.strip()] = v
+        hc = {"PortBindings": bind, "Binds": split(self.vols.get_text()),
+              "RestartPolicy": {"Name": self.restart.get_selected_item().get_string()},
+              "AutoRemove": self.autorm.get_active()}
+        if hc["AutoRemove"] and hc["RestartPolicy"]["Name"] != "no":
+            raise ValueError("A container that removes itself can't also restart: pick restart policy “no”")
+        cfg = {"Image": self.image["ref"], "Env": [f"{k}={v}" for k, v in env.items()], "ExposedPorts": expose,
+               "HostConfig": hc}
+        if self.cmd.get_text().strip():
+            cfg["Cmd"] = shlex.split(self.cmd.get_text())
+        if self.entry.get_text().strip():
+            cfg["Entrypoint"] = shlex.split(self.entry.get_text())
+        for key, w in (("User", self.user), ("WorkingDir", self.workdir), ("Hostname", self.hostname)):
+            if w.get_text().strip():
+                cfg[key] = w.get_text().strip()
+        if self.tty.get_active():
+            cfg.update(Tty=True, OpenStdin=True)
+        net = self.net_names[self.net.get_selected()]
+        hc["NetworkMode"] = net
+        if self.alias.get_text().strip() and net not in ("bridge", "none", "host"):
+            cfg["NetworkingConfig"] = {"EndpointsConfig": {net: {"Aliases": split(self.alias.get_text())}}}
+        if self.mem.get_value() > 0:
+            hc["Memory"] = int(self.mem.get_value()) * 1024 * 1024
+        if self.cpu.get_value() > 0:
+            hc["NanoCpus"] = int(self.cpu.get_value() * 1e9)
+        if self.gpu.get_active():
+            hc["DeviceRequests"] = [{"Driver": "", "Count": -1, "Capabilities": [["gpu"]]}]
+        if self.hcmd.get_text().strip():
+            cfg["Healthcheck"] = {"Test": ["CMD-SHELL", self.hcmd.get_text().strip()],
+                                  "Interval": int(self.hint.get_value() * 1e9), "Retries": int(self.hret.get_value())}
+        if self.use_init.get_active():
+            hc["Init"] = True
+        if self.ro.get_active():
+            hc["ReadonlyRootfs"] = True
+        if self.privileged.get_active():
+            hc["Privileged"] = True
+        if split(self.caps.get_text()):
+            hc["CapAdd"] = [c.upper() for c in split(self.caps.get_text())]
+        labels_ = dict(kv.partition("=")[::2] for kv in split(self.labels.get_text()))
+        if labels_:
+            cfg["Labels"] = labels_
+        return cfg
+
+    def _run(self):
         try:
-            for p in split(self.ports.get_text()):
-                host, _, ctr = p.rpartition(":")
-                ctr = ctr if "/" in ctr else ctr + "/tcp"
-                expose[ctr] = {}
-                bind.setdefault(ctr, []).append({"HostPort": host or ctr.split("/")[0]})
-            cmd = shlex.split(self.cmd.get_text()) if self.cmd.get_text().strip() else None
+            cfg = self.config()
         except ValueError as e:
             self.win.toast(f"Check the settings: {e}")
             return
-        cfg = {"Image": self.image["ref"], "Env": split(self.env.get_text()), "ExposedPorts": expose,
-               "HostConfig": {"PortBindings": bind, "Binds": split(self.vols.get_text()),
-                              "RestartPolicy": {"Name": self.restart.get_selected_item().get_string()}}}
-        if cmd:
-            cfg["Cmd"] = cmd
         name = self.name.get_text().strip()
         self.run_btn.set_sensitive(False)
 
@@ -592,12 +1048,30 @@ class RunDialog(Adw.Dialog):
             self.win.toast(f"Started {name or cid[:12]}")
             self.store.refresh("containers")
             self.close()
-            self.win.show_container(cid)
+            if not cfg["HostConfig"].get("AutoRemove"):
+                self.win.show_container(cid)
 
         def fail(e):
             self.run_btn.set_sensitive(True)
             self.win.toast(str(e))
         bg(work, done=done, error=fail)
+
+
+def parse_env_file(path):
+    """KEY=value lines (# comments, export prefixes and surrounding quotes allowed), like docker --env-file."""
+    out = {}
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            k = k.strip().removeprefix("export ").strip()
+            v = v.strip()
+            if len(v) >= 2 and v[0] == v[-1] and v[0] in "\"'":
+                v = v[1:-1]
+            out[k] = v
+    return out
 
 
 # ───────────────────────────── Volumes ─────────────────────────────
@@ -647,16 +1121,24 @@ class VolumesPage(TablePage):
                     sort=lambda r: r.data["created"])
 
         def act_setup():
-            b = icon_button("user-trash-symbolic", "Delete")
-            b.row = None
-            b.connect("clicked", lambda *_: b.row and self._delete(b.row))
-            return b
+            from . import quick
+            box = Gtk.Box(spacing=2, halign=Gtk.Align.END)
+            box.row = None
+            box.more = row_menu(box, [
+                ("Rename…", lambda r: quick.rename_volume(self.win, self.store, r.key)),
+                ("Clone…", lambda r: quick.clone_volume_ask(self.win, self.store, r.key)),
+                ("Open (browse files)", lambda r: self.on_activate(r))])
+            box.trash = icon_button("user-trash-symbolic", "Delete")
+            box.trash.connect("clicked", lambda *_: box.row and self._delete(box.row))
+            box.append(box.more)
+            box.append(box.trash)
+            return box
 
-        def act_upd(b, r):
-            b.row = r
-            b.set_sensitive(not r.data["used"])
-            b.set_tooltip_text("In use — delete its container first" if r.data["used"] else "Delete")
-        self.widget_column("", act_setup, act_upd, width=56)
+        def act_upd(box, r):
+            box.row = r
+            box.trash.set_sensitive(not r.data["used"])
+            box.trash.set_tooltip_text("In use — delete its container first" if r.data["used"] else "Delete")
+        self.widget_column("", act_setup, act_upd, width=88)
 
     def on_show(self):
         if self.store.volumes is None:
@@ -740,9 +1222,22 @@ class VolumeDetail(Adw.NavigationPage):
         hb = Adw.HeaderBar()
         self.wt = Adw.WindowTitle(title=d["name"], subtitle=("Used by " + ", ".join(d["used"])) if d["used"] else "Not used by any container")
         hb.set_title_widget(self.wt)
-        for lbl, tip, fn in (("Clone…", "Copy everything into a new volume", self._clone),
-                             ("Import…", "Unpack a .tar / .tar.gz into this volume", self._import),
-                             ("Export…", "Save the volume's files as a .tar.gz", self._export)):
+        # two buttons and a menu: the header must fit a 1024 px window (five labelled buttons didn't)
+        menu = Gio.Menu()
+        menu.append("Import a .tar / .tar.gz…", "vol.import")
+        menu.append("Clone into a new volume…", "vol.clone")
+        menu.append("Rename…", "vol.rename")
+        more = Gtk.MenuButton(icon_name="view-more-symbolic", menu_model=menu,
+                              tooltip_text="Import, clone or rename this volume")
+        hb.pack_end(more)
+        ag = Gio.SimpleActionGroup()
+        for name, fn in (("import", self._import), ("clone", self._clone), ("rename", self._rename)):
+            a = Gio.SimpleAction.new(name, None)
+            a.connect("activate", lambda *_a, f=fn: f())
+            ag.add_action(a)
+        self.insert_action_group("vol", ag)
+        for lbl, tip, fn in (("Export…", "Save the volume's files as a .tar.gz", self._export),
+                             ("Schedule backups…", "Back up this volume every hour, day or week", self._schedule)):
             b = Gtk.Button(label=lbl, tooltip_text=tip)
             b.connect("clicked", lambda *_, f=fn: f())
             hb.pack_end(b)
@@ -776,6 +1271,12 @@ class VolumeDetail(Adw.NavigationPage):
             bg(stop_volume_helper, self.page.store.engine, self.helper)
             self.helper = None
 
+    def _schedule(self):
+        from .backups_page import ScheduleDialog
+        bp = self.page.win.pages.get("backups")
+        if bp:
+            ScheduleDialog(bp, preset=("volume", self.d["name"])).present(self.page.win)
+
     def _export(self):
         win, eng, n = self.page.win, self.page.store.engine, self.d["name"]
 
@@ -796,6 +1297,15 @@ class VolumeDetail(Adw.NavigationPage):
             confirm(win, "Import into this volume?", f"Files from <tt>{esc(os.path.basename(path))}</tt> are unpacked into "
                     f"<tt>{esc(n)}</tt>; files with the same names are replaced.", "Import", really)
         open_dialog(win, "Import into volume", go, ["*.tar", "*.tar.gz", "*.tgz"])
+
+    def _rename(self):
+        from .files import stop_volume_helper
+        from .quick import rename_volume
+        if self.helper:                                   # release the volume from our own file browser first
+            stop_volume_helper(self.page.store.engine, self.helper)
+            self.helper = None
+        self.page.nav.pop_to_tag("list")
+        rename_volume(self.page.win, self.page.store, self.d["name"])
 
     def _clone(self):
         win, eng, n = self.page.win, self.page.store.engine, self.d["name"]
@@ -910,12 +1420,12 @@ class NetworkDetail(Adw.NavigationPage):
         self.page, self.d = page, d
         tv = Adw.ToolbarView()
         tv.add_top_bar(Adw.HeaderBar())
-        self.pp = Adw.PreferencesPage()
+        self.pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))
         tv.set_content(self.pp)
         self.set_child(tv)
         self.groups = []
         self._h = page.store.connect("containers", lambda *_: self.reload())
-        self.connect("destroy", lambda *_: page.store.disconnect(self._h))
+        release_on_leave(self, lambda: page.store.disconnect(self._h))
         self.reload()
 
     def reload(self):
@@ -1012,10 +1522,26 @@ class BuildHistoryPage(TablePage):
         self.stack.set_visible_child_name("loading")
 
         def work():
-            out = run_capture(["docker", "buildx", "history", "ls", "--format", "{{json .}}"], 60)
+            try:
+                out = run_capture(["docker", "buildx", "history", "ls", "--format", "{{json .}}"], 60)
+            except FileNotFoundError:
+                return "Build history needs the docker command, which isn't installed here."
+            except RuntimeError as e:
+                m = str(e)
+                if any(x in m for x in ("unknown flag", "is not a docker command", "unknown command", "buildx")):
+                    return ("Build history comes from Docker Buildx, which this engine doesn't have (Docker Desktop "
+                            "includes it; on Linux install the docker-buildx package).")
+                raise
             return [json.loads(ln) for ln in out.splitlines() if ln.strip().startswith("{")]
 
         def done(rows):
+            if isinstance(rows, str):                  # not available here: say why instead of an error
+                self.set_rows([], self.c_started)
+                self.note.set_text(rows)
+                self.note.set_visible(True)
+                self.wtitle.set_subtitle("Not available with this engine")
+                return
+            self.note.set_visible(False)
             self.set_rows([Row("build", b.get("ref", str(i)), b) for i, b in enumerate(rows)], self.c_started)
             self.wtitle.set_subtitle(f"{len(rows)} builds · {sum(1 for b in rows if b.get('status') != 'Completed')} not completed")
         bg(work, done=done, error=lambda e: (self.set_rows([]), self.win.toast(f"Build history: {e}")))
@@ -1147,6 +1673,11 @@ class ResourcesPage(Gtk.Box):
     title, icon = "Resource usage", "utilities-system-monitor-symbolic"
     wants_stats = True
 
+    def on_size(self, n):
+        from .util import set_columns
+        set_columns(self.tiles_box, 2 if n in ("sm", "md") else 4)
+        set_columns(self.charts_box, 1 if n == "sm" else 2)
+
     def __init__(self, win, store, settings):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.win, self.store, self.settings = win, store, settings
@@ -1180,6 +1711,7 @@ class ResourcesPage(Gtk.Box):
         body.append(tiles)
         row = Gtk.FlowBox(homogeneous=True, min_children_per_line=1, max_children_per_line=2, column_spacing=12,
                           row_spacing=12, selection_mode=Gtk.SelectionMode.NONE)
+        self.charts_box = row
         self.ch_cpu = charts.LineChart(lambda v: fmt_pct(v), 200)
         self.ch_mem = charts.LineChart(fmt_bytes, 200, binary=True)
         self.legends = {}
@@ -1302,7 +1834,7 @@ class DiskPage(Gtk.Box):
         header = PageHeader("Disk usage", "Where Docker keeps its data, and what you can safely reclaim")
         header.add(Gtk.Button(label="Measure again", tooltip_text="Ask Docker for fresh sizes")).connect("clicked", lambda *_: self.on_show())
         flat_page(tv, header)
-        self.pp = Adw.PreferencesPage()
+        self.pp = WidePrefs(two_at=("lg", "xl", "2xl", "3xl"))
         self.fs_group = Adw.PreferencesGroup(title="Where Docker keeps its data")
         self.pp.add(self.fs_group)
         self.cat_group = Adw.PreferencesGroup(title="Inside Docker", description="Sizes as Docker reports them. Cleaning frees space on the drive above.")
@@ -1327,8 +1859,11 @@ class DiskPage(Gtk.Box):
         self._clear(self.fs_group)
         root = self.store.info.get("DockerRootDir") or "/var/lib/docker"
         try:
-            st = os.statvfs(root)
-            total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+            if not self.store.engine.path.startswith(("/", "unix://", "npipe://")):
+                raise OSError("a remote engine: its disk isn't on this computer")
+            import shutil
+            du = shutil.disk_usage(root)                          # works on Linux, macOS and Windows
+            total, free = du.total, du.free
             r = Adw.ActionRow(title=esc(root), subtitle=f"{fmt_bytes(total - free)} used · {fmt_bytes(free)} free of {fmt_bytes(total)}")
             lvl = Gtk.LevelBar(min_value=0, max_value=1, value=(total - free) / total if total else 0, valign=Gtk.Align.CENTER,
                                width_request=220)

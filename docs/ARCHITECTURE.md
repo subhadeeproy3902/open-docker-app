@@ -6,7 +6,7 @@ Berth is a single Python process: GTK 4 + libadwaita for the UI, the standard li
 flowchart TB
     subgraph UI["UI thread (GTK main loop)"]
         APP["app.py — window, sidebar, status bar, theme"]
-        PAGES["containers.py · pages.py · logs.py · k8s.py · settings_page.py"]
+        PAGES["containers.py · pages.py · logs.py · db_page.py · sharing_page.py · k8s.py · settings_page.py"]
         WIDGETS["charts.py (cairo) · files.py · edit.py · compose.py · scan.py"]
     end
     STORE["store.py — last known lists, refresh on events, GObject signals"]
@@ -14,9 +14,11 @@ flowchart TB
     STREAMS["dedicated threads — events, logs, pull, exec"]
     SAMPLER["stats.py — cgroup v2 sampler, sleeps unless visible"]
     ENGINE["engine.py — HTTP over unix:// or tcp://"]
+    BACKENDS["db.py (database backends) · sharing.py (proxy, tunnels)"]
     DOCKER[("Docker / Podman")]
     APP --> PAGES --> WIDGETS
     PAGES -- "requests" --> POOL --> ENGINE --> DOCKER
+    POOL --> BACKENDS --> ENGINE
     DOCKER -- "events" --> STREAMS --> STORE -- "signals" --> PAGES
     SAMPLER -- "/sys/fs/cgroup" --> STORE
 ```
@@ -59,3 +61,29 @@ verify it runs → delete the old one. Any failure removes the replacement and r
 Volume browsing, export, import and clone use a throwaway `busybox` helper container (labelled
 `io.github.subhadeeproy3902.berth.helper=volume`, auto-removed). Vulnerability scans run `aquasec/trivy` as a container
 with its database cached in the `berth-trivy-cache` volume.
+
+## Databases (`db.py`, `db_page.py`)
+
+One `Backend` per engine with the same small interface — `connect`, `databases`, `tree` / `children`, `browse`,
+`structure`, `query`, `is_destructive` — so the UI (`db_page.Explorer`) is engine-agnostic. Detection is by image name
+(with an env fallback), see `db.IMAGES`.
+
+- **Transport.** SQL / Redis / MongoDB run the client that ships in the image through `docker exec`; credentials come
+  from the container's env or its `*_FILE` secret and are passed as env of that exec only. HTTP engines go through
+  `db.Http`: published port → container IP (local Linux engines) → curl / wget inside the container.
+- **Read-only first.** The UI passes `allow_write=True` only while the user's “Allow changes” switch is on (reset when
+  the page closes). Each backend enforces read-only at the lowest level it can (server-side read-only transactions for
+  Postgres, read-only session + statement check for MySQL, allow-lists for Redis and HTTP, EJSON-only filters and no
+  shell for MongoDB).
+- **SQLite** is a copy: fetched with the archive API (plus `-wal` / `-shm`), folded into a private temp file and
+  opened `mode=ro`; removed when the explorer closes.
+
+## Ports & sharing (`sharing.py`, `sharing_page.py`)
+
+- **Local addresses**: `berth-proxy` (caddy:2-alpine), published on 127.0.0.1 only, CA in the `berth-proxy-data`
+  volume. Routes live in Berth's settings; `apply_routes` connects the proxy to a network of each target, writes the
+  Caddyfile with the archive API and runs `caddy reload` inside the container (the admin API is never published). A
+  route signature (target state + IPs) is checked on container events and re-applied when it changes.
+- **Public links**: one `cloudflared` container per shared port with `NetworkMode: container:<target>`, labelled
+  `io.berth.role=tunnel`; the quick-tunnel URL is read from its log. `App.do_shutdown` removes every tunnel not
+  labelled `io.berth.keep=1`.

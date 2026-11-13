@@ -11,7 +11,7 @@ from berth import app as A
 
 OUT = sys.argv[1]; THEME = sys.argv[2] if len(sys.argv) > 2 else "dark"
 os.makedirs(OUT, exist_ok=True)
-PAGES = ["containers", "images", "volumes", "networks", "databases", "sharing", "send", "logs", "builds", "cache", "resources", "disk", "kubernetes", "settings"]
+PAGES = ["containers", "stacks", "images", "volumes", "networks", "backups", "databases", "sharing", "send", "logs", "builds", "cache", "resources", "disk", "kubernetes", "settings"]
 
 
 def grab(win, name):
@@ -64,6 +64,25 @@ def scenario(app):
             fb.load("/etc/nginx/conf.d"); yield 2
             fb._open(("/etc/nginx/conf.d/default.conf", False, 1200, "644")); yield 2
             yield from grab(win, "container-file-editor")
+    # the database explorer with a row open in the side panel (demo shop-db-1 → customers)
+    dbc = next((c for c in win.store.containers if c["Names"][0] == "/shop-db-1"), None)
+    if dbc:
+        dp = win.pages["databases"]; win.go("databases"); yield 1
+        dp.open(dbc["Id"])
+        for _ in range(80):
+            ex = dp.nav.get_visible_page().get_child()
+            if getattr(ex, "nodes", None) and getattr(ex, "data", None) and ex.data.result is not None:
+                break
+            yield 0.25
+        node = next((k for n in ex.nodes for k in ([n] if n.leaf else ex.b.children(n)) if k.label == "customers"), None)
+        if node:                                 # select it in the tree, as a click would
+            for i in range(ex.tree_model.get_n_items()):
+                if ex.tree_model.get_item(i).get_item().v is node:
+                    ex.sel.set_selected(i)
+                    break
+            yield 3
+            ex.data.open(2); yield 3
+            yield from grab(win, "databases-row")
     app.quit()
 
 

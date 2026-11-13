@@ -80,6 +80,8 @@ Docker Desktop 控制面板的日常功能它都有 —— 却没有虚拟机、
 
 **数据库**：浏览并查询容器中的 PostgreSQL、MySQL / MariaDB、Redis / Valkey、MongoDB、Vespa、OpenSearch / Elasticsearch、Typesense、Meilisearch 与 SQLite 文件（无需驱动、无需额外端口，默认只读）。**端口与分享**：为容器设置 `https://shop.localhost` 这样的本地地址（仅本机可访问），或通过 Cloudflare Tunnel 生成公开链接（无需账号，退出 Berth 时自动停止）。
 
+**1.3 新功能**：**编辑数据库**（点击一行查看完整内容、双击单元格直接修改、新增与删除行、整表导出 / 导入）· **备份**（数据库与数据卷，立即或定时备份，一键恢复）· **堆栈**（按 Compose 项目启动、停止、更新，运行前先做 **Compose 检查**）· 容器批量操作 · 崩溃或不健康时**通知** · 从 Dockerfile **构建**并检查镜像**更新** · <kbd>Ctrl</kbd>+<kbd>K</kbd> **全局搜索** · **SSH** 远程引擎 · **发送文件**（用二维码分享到手机）。
+
 另外还有：按 Compose 分组的容器管理、Exec 内置终端（VTE）、容器编辑（安全重建）、Compose 运行/编辑、数据卷导出导入克隆、网络连接与断开、构建历史与构建缓存、磁盘占用、Kubernetes（Pod / Deployment / Service / Node、编辑 YAML、kind 本地集群）、引擎切换（Docker / rootless / Podman / context / tcp）、镜像仓库登录、可选托盘图标、浅色 / 深色主题，以及无障碍设置（文字大小 85–150 %、紧凑 / 舒适 / 宽松密度、更清晰的边框与对比度、更大的图标、减少动画）。
 
 ## 安装
@@ -121,11 +123,11 @@ Mac 上需要一个 Docker 引擎：**Colima**（`brew install colima docker && 
 
 > 详细步骤：**[docs/INSTALL-Windows.md](docs/INSTALL-Windows.md)**（无需代码签名证书）。
 
-从 [最新发布](https://github.com/subhadeeproy3902/open-docker-app/releases/latest) 下载 **`Berth-windows-x64.zip`**，解压后运行 `Berth.exe`，通过 TCP 连接引擎（Docker Desktop：*Settings → General → Expose daemon on tcp://localhost:2375*）。目前最顺畅的方式是在 **WSL 2** 里运行 Linux 版（WSLg 会显示窗口）。
+从 [最新发布](https://github.com/subhadeeproy3902/open-docker-app/releases/latest) 下载 **`Berth-windows-x64.zip`**，解压后运行 `Berth.exe`，只要 **Docker Desktop 在运行，就无需任何设置**（与 `docker` 命令一样通过命名管道连接）。WSL 2 中的 Docker Engine 可用 `tcp://localhost:2375` 连接。目前最顺畅的方式是在 **WSL 2** 里运行 Linux 版（WSLg 会显示窗口）。
 
 ## 快捷键
 
-<kbd>Ctrl</kbd>+<kbd>F</kbd> 搜索 · <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> 切换页面 · <kbd>Ctrl</kbd>+<kbd>,</kbd> 设置 · <kbd>Ctrl</kbd>+<kbd>S</kbd> 保存 · <kbd>Ctrl</kbd>+<kbd>Q</kbd> 退出
+<kbd>Ctrl</kbd>+<kbd>K</kbd> 全局搜索 · <kbd>Ctrl</kbd>+<kbd>F</kbd> 页面内搜索 · <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> 切换页面 · <kbd>Ctrl</kbd>+<kbd>,</kbd> 设置 · <kbd>Ctrl</kbd>+<kbd>S</kbd> 保存 · <kbd>Ctrl</kbd>+<kbd>Q</kbd> 退出
 
 ## 常见问题
 
@@ -137,7 +139,7 @@ Mac 上需要一个 Docker 引擎：**Colima**（`brew install colima docker && 
 
 ## 路线图
 
-签名与公证的 macOS 版本、Windows MSI 安装包 · Flathub 与 AUR 上架 · Windows 命名管道 · SSH 远程引擎 · 数据卷定时备份 · 镜像层浏览器 · Compose 依赖图 · 资源告警 · 更多 Kubernetes 资源 · 界面多语言（中文、日文……）
+签名与公证的 macOS 版本、Windows MSI 安装包 · Flathub 与 AUR 上架 · 镜像层浏览器 · Compose 依赖图 · 资源告警 · 更多 Kubernetes 资源 · 界面多语言（中文、日文……）
 
 ## 参与贡献
 

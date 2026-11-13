@@ -111,8 +111,9 @@ arrives; there are no animations or timers while idle. A *Software rendering* sw
 | <img src="docs/screenshots/logs-explorer-dark.png" alt="Log explorer"> **Log explorer** — Loki/Grafana-style histogram coloured by level, drag to zoom, Live / 5 min … 7 days, level filters with counts, regex search, per-container colours. | <img src="docs/screenshots/resource-usage-dark.png" alt="Resource usage"> **Resource usage** — live CPU and memory per Compose project (1–30 min), totals, heaviest containers with sparklines. |
 | <img src="docs/screenshots/files-editor-light.png" alt="File editor"> **Files** — browse, view and **edit** files in running containers and in volumes; upload, download, rename, delete. | <img src="docs/screenshots/container-stats-dark.png" alt="Container stats"> **Per-container stats** — CPU, memory, network and disk graphs with hover values. |
 | <img src="docs/screenshots/images-dark.png" alt="Images"> **Images** — in use / unused / dangling, Docker Hub search & pull with progress, run with ports/env/volumes, vulnerability scan, tag, push, save / load. | <img src="docs/screenshots/settings-light.png" alt="Settings"> **Settings** — light / dark / system theme, **accessibility** (text size 85–150 %, compact / comfortable / spacious density, stronger borders and contrast, larger icons, reduce motion), resource saver, engine switcher, registry sign-in, `daemon.json` editor, optional tray icon. |
-
 | <img src="docs/screenshots/databases-dark.png" alt="Database explorer"> **Databases** — browse and query **PostgreSQL, MySQL / MariaDB, Redis / Valkey, MongoDB, Vespa, OpenSearch / Elasticsearch, Typesense, Meilisearch** and SQLite files in your containers: tables / keys / collections / indices, paged data, structure and indexes, a query console with history, **edit rows, keys and documents** (click a row to open it in full, double-click a cell), sort and filter on the server, export or import a whole table as CSV / JSON. No drivers and no extra ports (Berth uses the client inside the image), **read-only unless you switch on “Allow changes”**. | <img src="docs/screenshots/sharing-light.png" alt="Ports and sharing"> **Ports & sharing** — give a container a friendly address like `https://shop.localhost` (one small local proxy, on 127.0.0.1 only), **share a port publicly** with a Cloudflare Tunnel link (no account needed; stops when Berth quits unless you keep it), and see every published port, with a warning on the ones open to your whole network. |
+| <img src="docs/screenshots/stacks-light.png" alt="Stacks"> **Stacks** — every Compose project, also ones taken down: up, down, restart, pull & recreate, edit, logs, and a **Compose check** that catches port clashes, unset variables and missing files before anything starts. | <img src="docs/screenshots/backups-dark.png" alt="Backups"> **Backups** — databases (pg_dump, mysqldump, mongodump, Redis) and volumes, right now or on a schedule; keep the newest few; restore with one click. |
+| <img src="docs/screenshots/send-dark.png" alt="Send files"> **Send files** — share files or a folder with a phone: a Wi-Fi link and QR code, PIN, expiry, download limit; receive files from a phone too. | |
 
 **Everything else**
 
@@ -260,16 +261,18 @@ notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 - [ ] Signed + notarized macOS build, signed Windows installer (MSI)
 - [ ] Flathub and AUR listings
-- [x] Native Windows named-pipe support (no TCP setting needed)
-- [ ] SSH remote engines (`ssh://` contexts)
-- [ ] Volume backup schedules and snapshot/restore
+- [x] Native Windows named-pipe support (no TCP setting needed) — 1.3
+- [x] SSH remote engines (`ssh://user@host`) — 1.3
+- [x] Database and volume backups on a schedule, with restore — 1.3
+- [ ] SQL editor: several tabs, saved queries, cancel a running query
+- [ ] Schema editing (create tables, columns, indexes) and following foreign keys
 - [ ] Image layer explorer (files per layer, wasted space)
 - [ ] Compose graph view (services, networks, volumes, depends_on)
-- [ ] Container resource alerts (notify when CPU/memory crosses a threshold)
+- [ ] Resource alerts (notify when CPU / memory / disk crosses a threshold — crashes and failed backups notify already)
 - [ ] More Kubernetes resources (ConfigMaps, Secrets, Ingress, Jobs)
 - [ ] Translations of the app UI (Chinese, Japanese, …)
 
-Ideas and votes welcome in [Issues](https://github.com/subhadeeproy3902/open-docker-app/issues).
+The full, page-by-page list is in [docs/GAPS.md](docs/GAPS.md). Ideas and votes welcome in [Issues](https://github.com/subhadeeproy3902/open-docker-app/issues).
 
 ## Contributing
 

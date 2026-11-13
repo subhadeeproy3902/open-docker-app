@@ -5,142 +5,78 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
-### Added — Send files (share0-style), phones, renames
-- **Send files**: share files or folders straight from disk with a Wi-Fi link + QR code (no app, no account, nothing
-  uploaded first); video/image preview, Range requests (seek, resume), folder browsing, download-everything .zip, PIN,
-  expiry, download limit; **receive mode** (a phone uploads into a folder, never overwriting); one-tap **public link**
-  (Cloudflare quick tunnel) for networks that block phones; firewall check + "Allow" (firewalld via polkit, ufw via
-  pkexec, until reboot). Built-in QR generator (`berth/qr.py`, no dependency, verified with a decoder).
-- **Phones for local addresses**: "Phones on this Wi-Fi too" gives an address its own Wi-Fi port and QR code; only
-  that port is published to the network.
-- **Rename / change ports everywhere**: ⋮ on container, image, volume and database rows; Rename container (live),
-  Change ports (per port "this computer only" / "whole network", conflict check), Rename image (tag + untag),
-  Rename volume (stop users → copy → re-point → restart → delete old), Clone volume; database explorer renames
-  tables/views/keys/collections and Postgres databases (only with "Allow changes").
-- Public links can **expire** (15 min … 1 week, or a date); Berth sweeps them, a systemd user timer is the backstop.
-- **Backups** page: back up a database (pg_dump, mysqldump, mongodump, Redis RDB) or a volume now or on a schedule
-  (hourly … weekly, keep the newest N), see every backup file, restore one. Runs while Berth is open (also in the
-  tray) and catches up missed ones; on Linux a user timer (`berth --run-backups`) also runs them while it is closed.
-- **Stacks** page: every Compose project — also ones taken down — with up / down / restart / pull-and-recreate, edit,
-  logs and folder. **Compose check** before running a file: syntax, unset variables, port clashes with containers
-  or other programs, taken container names, missing build folders, env files, external volumes and networks.
-- Database explorer: **edit a cell in place** (double-click), select several rows (Ctrl/Shift+click) to copy or
-  delete them, **export a whole table** to CSV / JSON, **import** CSV / JSON (add or replace, all or nothing).
-- Containers: **selection mode** — tick containers or whole stacks, then start / stop / restart / remove together.
-- **Notifications** when a container stops unexpectedly, runs out of memory or turns unhealthy, and when a backup
-  fails (Settings → Notifications).
-- **Run dialog with every common option**: network and alias, memory / CPU / GPU, health check, env file,
-  entrypoint, user, TTY, init, read-only, capabilities, privileged, labels, ports on this computer only.
-- Images: **Build…** from a folder with a Dockerfile (BuildKit through the docker CLI, the engine API without it,
-  .dockerignore honoured); **Check for updates** (daily) marks tags with a newer version; **Update** pulls it and
-  recreates the containers that use it with the same settings.
-- **Ctrl+K / ⌘K** (and a Search button in the sidebar): jump to any container, stack, image, volume, network,
-  database or page, or start a common task.
-- **Windows: no setup with Docker Desktop.** Berth talks to Docker Desktop (and Podman) through the Windows named
-  pipe, like the `docker` command — the unsafe "Expose daemon on tcp://localhost:2375" setting is no longer needed.
-  Tested in CI on a Windows runner with Docker (ping, lists, live streams, a container's logs).
-- **Remote engines over SSH**: `ssh://user@host` in Settings — the system's OpenSSH and your keys, one tunnel per
-  engine, clear messages when keys or the remote socket are the problem.
-- **Update notice**: once a day Berth asks GitHub for the latest release and shows a banner (Settings → off; never
-  in the Flatpak).
-- `berth --self-test`; CI now runs every suite (app paths, click-everything, UI audit, SSH) and installs Berth with
-  `scripts/install.sh` on Fedora, Debian, Ubuntu, openSUSE and Arch, then opens every screen; the macOS and Windows
-  builds run the self-test.
-- **Edit data in the database explorer**: click a row to open it in a side panel with every value in full (type,
-  key, NULL, pretty JSON, binary saved to a file); change values, add rows, delete rows — PostgreSQL and
-  MySQL/MariaDB by primary key; Redis strings, hashes, lists, sets, sorted sets, streams, RedisJSON, plus new key,
-  expiry and delete; MongoDB and the search engines as JSON documents. Empty or delete a table / collection / index.
-  Everything needs "Allow changes"; a row changed by someone else meanwhile is reported, never overwritten blindly.
-- **Sort and filter**: click a column header to sort, type a condition to filter — over the whole table, on the
-  server.
-- `docs/GAPS.md`: what Berth still lacks, checked page by page against Docker Desktop, Dockhand and SQL clients.
-- **Database tab** on every database container's detail page: the explorer opens right there.
-- Container list shows **"public"** and **"address"** badges next to names that are shared or have a local address.
-- **Settings → Local addresses proxy**: status, Stop, Remove, and a shortcut to Ports & sharing.
-- Every icon-only button has a tooltip (incl. libadwaita's own back/menu buttons). `tools/ui_audit.py` walks every
-  page, tab and dialog and fails on an icon button without a tooltip or a field without a hint.
-- **Diagnostics**: every error goes to `~/.cache/berth/berth.log`; Settings → Copy diagnostic report / Open the log
-  folder.
+## [1.3.0] - 2026-11-13
+
+The biggest release so far: Berth now reaches into your databases, shares what you run, backs it up, and works the
+same on Linux, macOS and Windows. (Issues #25, #26, #27 — pull request #36.)
+
+### Added — Connect: databases, addresses, links, files
+- **Database explorer** for PostgreSQL (incl. PostGIS, TimescaleDB, pgvector), MySQL / MariaDB, Redis / Valkey,
+  MongoDB, Vespa, OpenSearch / Elasticsearch, Typesense, Meilisearch and SQLite files. No drivers and no extra
+  ports: Berth uses the client inside the image (or a tiny helper in the container's network).
+  - Tree of schemas / tables / keys / collections / indices with sizes; paged data in a SQL-client grid (row
+    numbers, columns sized to their content, horizontal scroll); **sort** by a column and **filter** rows, on the
+    server; structure and indexes; a query console with history; export to CSV / JSON / Markdown.
+  - Click a row: every value **in full** in a side panel (JSON formatted, binary saved to a file).
+  - **Edit data**: change values, add and delete rows (by primary key), edit a cell in place (double-click),
+    select several rows to copy or delete; Redis keys of every type (plus new key, expiry); MongoDB and search
+    documents field by field. Read-only until you switch on **Allow changes**; a row changed by someone else is
+    reported, never overwritten.
+  - **Whole tables**: export every row to CSV / JSON, import CSV / JSON (add or replace, all or nothing).
+  - **Rename** tables, keys, collections and Postgres databases; empty or delete a table.
+  - Large values never break a page (long text cut on the server with its length, binary as its size, pages that
+    shrink by themselves).
+  - A **Database** tab on every database container.
+- **Ports & sharing**: friendly local addresses like `https://shop.localhost` (one small proxy, 127.0.0.1 only;
+  phones on the same Wi-Fi optional), **public links** through a Cloudflare tunnel (no account, can expire, stop
+  when Berth quits unless kept), and every published port with a warning on the ones open to the whole network.
+- **Send files**: share files or folders with a Wi-Fi link and QR code (preview, resume, PIN, expiry, download
+  limit), receive files from a phone, optional public link.
+
+### Added — manage more with fewer clicks
+- **Backups** page: back up a database (pg_dump, mysqldump, mongodump, Redis RDB) or a volume now or on a schedule,
+  keep the newest N, restore with one click. Missed backups run at start; on Linux a user timer
+  (`berth --run-backups`) also runs them while Berth is closed.
+- **Stacks** page: every Compose project (also ones taken down) with up / down / restart / pull-and-recreate, edit,
+  logs, folder. A **Compose check** before running a file: syntax, unset variables, port clashes with containers or
+  other programs, taken names, missing build folders, env files, volumes and networks.
+- **Containers**: selection mode for bulk start / stop / restart / remove; rename and change ports of any
+  container (warns about ports used by other programs); "public" / "address" badges.
+- **Notifications** when a container crashes, runs out of memory or turns unhealthy, and when a backup fails.
+- **Run dialog** with every common option (network and alias, memory / CPU / GPU, health check, env file, user,
+  entrypoint, TTY, init, read-only, capabilities, privileged, labels, ports on this computer only).
+- **Images**: build from a folder with a Dockerfile (BuildKit through the CLI, the engine API without it);
+  "update available" for pulled tags and a one-click update that recreates the containers using them; rename
+  images and volumes; clone volumes.
+- **Search everything** with Ctrl+K (⌘K on macOS) or the Search button: containers, stacks, images, volumes,
+  networks, databases, pages and tasks.
+- **Engines**: remote engines over SSH (`ssh://user@host`, your SSH keys); on **Windows**, Docker Desktop and
+  Podman through their named pipe — no TCP setting needed.
+- An **update notice** when a new Berth is out (daily, can be turned off; never in the Flatpak).
+- **Diagnostics**: errors go to a log; Settings → Copy diagnostic report.
 
 ### Changed
-- **Responsive on every screen size**: the window has size classes (sm < 900, md, lg ≥ 1280, xl ≥ 1600, 2xl ≥ 1920,
-  3xl ≥ 2560 sp). Spacing and type scale up on xl–3xl; grids pick their columns per class (databases 1→6, send cards
-  1→4, resource tiles 2→4, dashboard 1→2); tables share extra width across columns; Settings is wider and two columns
-  on 2xl / 3xl. Ranges are in sp, so a larger text size behaves like a smaller screen.
-- **Ports & sharing** is a dashboard: summary tiles (incl. ports open to the whole network), addresses and public links,
-  and a one-line-per-port table with exposure badges and actions. **Databases** are cards with engine badges,
-  status, exposure and Open / Start. The Berth logo is in the sidebar and on the engine-off screen.
+- Responsive on every screen size (size classes up to 2560 sp): grids pick their columns, detail pages and
+  Settings use two columns on large windows, dialogs size to their content, list tables hug their rows.
+- Every icon-only button has a tooltip; Settings stays pinned at the bottom of the sidebar.
+- macOS keyboard shortcuts use ⌘.
 
 ### Fixed
-- Found by clicking through every engine and page (`tools/walkthrough.py`, `tools/demo/engines.py`):
-  long values in the row panel were cut off after the first line; selecting a second row cleared the selection
-  (so Copy / Delete never appeared); Vespa documents with their own `id` field couldn't be opened, and documents
-  opened as one JSON blob (now field by field, saving only edited fields); Vespa's new-document template wasn't
-  valid JSON; MongoDB opened the non-existent default database ("test") with no way to pick the real one;
-  Typesense / search engines without curl in their image couldn't be reached when their port isn't reachable
-  (always the case on Docker Desktop for macOS / Windows) — a tiny curl helper in the container's network now
-  bridges it; dialogs whose content grows after opening (Compose check, Stacks check, Pull results, backups)
-  stayed at their first size and hid it; the Compose check said every image "will be downloaded" when the image
-  list wasn't loaded yet; Settings offered Stop / Remove for a proxy that doesn't exist; Pull lists official
-  images first. `_id` is read-only in MongoDB documents.
-- The click-through suites refuse to run against anything but the demo engine (unless told otherwise).
-- **Windows**: the Disk usage page and the status bar crashed (`os.statvfs` doesn't exist there) — now
-  `shutil.disk_usage`; free space is shown only for local engines (a remote engine's disk isn't on this computer).
-  The self-test ends with a report instead of hanging when a step fails.
-- The volume page header no longer overflows a 1024 px window (Import, Clone and Rename moved into ⋮). CI fails
-  on any layout wider than the window.
-- **macOS**: keyboard shortcuts use ⌘ (they were Ctrl only). **Windows**: "Pull and recreate" no longer needs `sh`.
-  The macOS / Windows builds now bundle every module (some were imported lazily and could be missing).
-- **The database grid** looks and behaves like a SQL client: row numbers, columns sized to their content, the last
-  one filling the width, horizontal scrolling, and a card only as tall as its rows. Rows are in primary-key order
-  (they sorted as text, 1, 10, 11, 2, and moved after an edit). The first table opens by itself.
-- **No more empty space or cut-off dialogs**: Ports, Share files, SQLite, Add address, Share publicly and Pull size
-  to their content (Pull suggests popular images); container Inspect / Mounts, image, network, Disk usage and
-  Settings use two columns on large windows; list tables hug their rows.
-- MySQL ignored errors for values over 100 KB (a too-long value looked saved). Volume files: an empty folder said
-  "this image has no shell", and unknown owners showed as UNKNOWN (now their uid). An invalid CSS rule on the Send
-  files drop zone.
-- **Large values in the database explorer** ("field larger than field limit (131072)" on a Postgres table with
-  big checkpoint blobs): long text is cut on the server to 4,000 characters with the full length shown, binary
-  columns show their size, huge Redis strings/hashes are sampled, pages that are still too large shrink
-  automatically (200 → 50 → 10 → 1 rows), and error messages are capped. Covered for Postgres, MySQL/MariaDB,
-  Redis, MongoDB, SQLite and the HTTP engines.
-- Change ports warns when the port is already used by another program on this computer, not only by containers.
-- Database, Send files and Ports & sharing cards have equal heights, aligned rows and buttons at the same place.
-- **Memory leak (up to 2.7 GB over a day)**: list pages rebuilt every row every 30 s, even when hidden, and the old
-  rows could never be freed. Rows are now updated in place; hidden pages don't rebuild. Detail pages release their
-  logs and streams when left.
-- The database explorer opened the empty default database in multi-database containers (e.g. 25 databases, "postgres"
-  empty): it now opens the one with data.
-- Recreating a container (Edit / ports) re-published 127.0.0.1-only ports on all interfaces.
-- A locked (PIN) share page no longer shows the file names before the PIN is entered.
+- A memory leak that could reach 2.7 GB over a day (list rows rebuilt every 30 s).
+- Recreating a container no longer re-publishes 127.0.0.1-only ports on every interface.
+- Windows: crashes on the Disk usage page and in the explorer (Linux-only calls); macOS / Windows builds now
+  include every module.
+- Charts couldn't draw on Debian, Ubuntu and openSUSE: the installer now adds the Python cairo bridge.
+- MongoDB opened the empty default database instead of the one with data; empty volume folders said "no shell";
+  a MySQL value too long for its column looked saved.
+- Many layout fixes found by clicking through every page and engine (values cut off in the row panel, dialogs
+  hiding results that arrived later, headers wider than small windows).
 
-### Added — Connect (sidebar section)
-- **Databases** (#25): find database containers and explore them — PostgreSQL (incl. PostGIS, TimescaleDB, pgvector),
-  MySQL / MariaDB, Redis / Valkey, MongoDB, Vespa, OpenSearch / Elasticsearch, Typesense, Meilisearch, and SQLite files
-  from any container or volume.
-  - Tree of schemas / tables / keys / collections / indices with row estimates and sizes; paged data; structure
-    (columns, types, constraints, indexes; Vespa `.sd` schemas; mappings); a query console (SQL, Redis commands, YQL,
-    `METHOD /path` + JSON) with Ctrl+Enter and per-database history; export to CSV / JSON / Markdown; row inspector.
-  - No drivers, no published ports: Berth runs the client inside the image (`psql`, `mariadb`, `redis-cli`, `mongosh`)
-    or speaks HTTP to the container. Passwords come from the container's env (or `*_FILE` secrets) and travel as env
-    variables of the exec, never in argv.
-  - **Read-only by default**, enforced as low as possible: Postgres in read-only transactions, MySQL
-    `SESSION TRANSACTION READ ONLY` plus a statement check, read-only command lists for Redis / HTTP engines, Mongo
-    filters are data (EJSON) and the shell needs “Allow changes”. Destructive statements ask again even then.
-  - SQLite opens a private copy (including recent WAL writes); the original is never touched.
-- **Ports & sharing** (#26, #27):
-  - **Local addresses**: `http(s)://name.localhost` for any container port — one opt-in Caddy container published on
-    127.0.0.1 only, reaching targets by name (user networks) or IP (default bridge, re-pointed after restarts). HTTPS
-    with a local CA you can export and trust.
-  - **Public links**: share a port with a Cloudflare quick tunnel (no account) or your own tunnel token; `cloudflared`
-    runs in the target's network namespace. A warning first, a status-bar marker while anything is public, and links
-    stop when Berth quits unless you keep them.
-  - **Ports in use**: every published port, flagged when it is open to the whole network (0.0.0.0).
-- Container menu: *Browse database*, *Give it a local address…*, *Share publicly…*.
-- `tests/connect.py`: integration test against a real engine (every database engine, read-only enforcement, SQLite +
-  WAL, proxy over HTTP/HTTPS, IP change after restart, public tunnel fetched over the internet); runs in CI without
-  the tunnel.
+### Tests
+- Integration against real Docker for every engine (edit, export / import, backup / restore round trips), the app
+  driven like a user, click-everything, a UI audit with screenshots of every screen, SSH engines, Send files.
+- CI installs Berth with `scripts/install.sh` on Fedora, Debian, Ubuntu, openSUSE and Arch and opens every screen;
+  the macOS and Windows builds run `berth --self-test`; a Windows job talks to Docker through the named pipe.
 
 ## [1.2.1] - 2026-11-09
 

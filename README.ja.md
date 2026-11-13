@@ -80,6 +80,8 @@ Linux にはすでに Docker Engine があります。それでも Docker Deskto
 
 **データベース**：コンテナ内の PostgreSQL、MySQL / MariaDB、Redis / Valkey、MongoDB、Vespa、OpenSearch / Elasticsearch、Typesense、Meilisearch と SQLite ファイルを閲覧・クエリ（ドライバー不要、追加ポート不要、既定は読み取り専用）。**ポートと共有**：`https://shop.localhost` のようなローカルアドレス（このコンピューターのみ）や、Cloudflare Tunnel による公開リンク（アカウント不要、Berth 終了時に停止）。
 
+**1.3 の新機能**：データベースの**編集**（行をクリックして全項目を表示、ダブルクリックでセルを直接編集、行の追加・削除、テーブル全体のエクスポート / インポート）· **バックアップ**（データベースとボリュームを今すぐ、またはスケジュールで、ワンクリックで復元）· **スタック**（Compose プロジェクトごとの起動・停止・更新と、実行前の **Compose チェック**）· コンテナの一括操作 · クラッシュや異常時の**通知** · Dockerfile からの**ビルド**とイメージの**更新確認** · <kbd>Ctrl</kbd>+<kbd>K</kbd> で**何でも検索** · **SSH** のリモートエンジン · **ファイル送信**（スマホへ QR コードで共有）。
+
 ほかにも：Compose ごとのコンテナ管理、Exec の内蔵ターミナル（VTE）、コンテナの編集（安全な再作成）、Compose の実行 / 編集、ボリュームのエクスポート・インポート・複製、ネットワークの接続 / 切断、ビルド履歴とビルドキャッシュ、ディスク使用量、Kubernetes（Pod / Deployment / Service / Node、YAML 編集、kind のローカルクラスター）、エンジン切り替え（Docker / rootless / Podman / context / tcp）、レジストリへのサインイン、任意のトレイアイコン、ライト / ダークテーマ、アクセシビリティ設定（文字サイズ 85–150 %、表示密度 コンパクト / 標準 / ゆったり、くっきりした枠線とコントラスト、大きいアイコン、アニメーションを減らす）。
 
 ## インストール
@@ -121,11 +123,11 @@ Mac では Docker エンジンが必要です：**Colima**（`brew install colim
 
 > 詳しい手順：**[docs/INSTALL-Windows.md](docs/INSTALL-Windows.md)**（コード署名証明書は不要）。
 
-[最新リリース](https://github.com/subhadeeproy3902/open-docker-app/releases/latest) から **`Berth-windows-x64.zip`** をダウンロードして展開し、`Berth.exe` を実行。TCP でエンジンに接続します（Docker Desktop：*Settings → General → Expose daemon on tcp://localhost:2375*）。現時点で最も快適なのは **WSL 2** 内で Linux 版を動かす方法です（WSLg がウィンドウを表示します）。
+[最新リリース](https://github.com/subhadeeproy3902/open-docker-app/releases/latest) から **`Berth-windows-x64.zip`** をダウンロードして展開し、`Berth.exe` を実行。**Docker Desktop が起動していれば設定は不要**です（`docker` コマンドと同じ名前付きパイプで接続します）。WSL 2 内の Docker Engine にも `tcp://localhost:2375` で接続できます。現時点で最も快適なのは **WSL 2** 内で Linux 版を動かす方法です（WSLg がウィンドウを表示します）。
 
 ## キーボードショートカット
 
-<kbd>Ctrl</kbd>+<kbd>F</kbd> 検索 · <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> ページ切り替え · <kbd>Ctrl</kbd>+<kbd>,</kbd> 設定 · <kbd>Ctrl</kbd>+<kbd>S</kbd> 保存 · <kbd>Ctrl</kbd>+<kbd>Q</kbd> 終了
+<kbd>Ctrl</kbd>+<kbd>K</kbd> 何でも検索 · <kbd>Ctrl</kbd>+<kbd>F</kbd> ページ内検索 · <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>9</kbd> ページ切り替え · <kbd>Ctrl</kbd>+<kbd>,</kbd> 設定 · <kbd>Ctrl</kbd>+<kbd>S</kbd> 保存 · <kbd>Ctrl</kbd>+<kbd>Q</kbd> 終了
 
 ## よくある質問
 
@@ -137,7 +139,7 @@ Mac では Docker エンジンが必要です：**Colima**（`brew install colim
 
 ## ロードマップ
 
-署名・公証済みの macOS 版と Windows の MSI インストーラー · Flathub と AUR への登録 · Windows の名前付きパイプ対応 · SSH リモートエンジン · ボリュームの定期バックアップ · イメージレイヤーエクスプローラー · Compose の依存グラフ · リソースアラート · Kubernetes リソースの拡充 · UI の多言語化（中国語、日本語 …）
+署名・公証済みの macOS 版と Windows の MSI インストーラー · Flathub と AUR への登録 · イメージレイヤーエクスプローラー · Compose の依存グラフ · リソースアラート · Kubernetes リソースの拡充 · UI の多言語化（中国語、日本語 …）
 
 ## コントリビュート
 

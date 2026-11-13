@@ -6,15 +6,15 @@ Berth is a single Python process: GTK 4 + libadwaita for the UI, the standard li
 flowchart TB
     subgraph UI["UI thread (GTK main loop)"]
         APP["app.py — window, sidebar, status bar, theme"]
-        PAGES["containers.py · pages.py · logs.py · db_page.py · sharing_page.py · k8s.py · settings_page.py"]
-        WIDGETS["charts.py (cairo) · files.py · edit.py · compose.py · scan.py"]
+        PAGES["containers.py · pages.py · logs.py · db_page.py · sharing_page.py · send_page.py · stacks_page.py · backups_page.py · k8s.py · settings_page.py"]
+        WIDGETS["charts.py (cairo) · files.py · edit.py · compose.py · scan.py · palette.py (Ctrl+K) · quick.py"]
     end
     STORE["store.py — last known lists, refresh on events, GObject signals"]
     POOL["util.bg — 4 worker threads"]
     STREAMS["dedicated threads — events, logs, pull, exec"]
     SAMPLER["stats.py — cgroup v2 sampler, sleeps unless visible"]
-    ENGINE["engine.py — HTTP over unix:// or tcp://"]
-    BACKENDS["db.py (database backends) · sharing.py (proxy, tunnels)"]
+    ENGINE["engine.py — HTTP over unix://, tcp://, npipe:// (Windows) or ssh:// (sshtunnel.py)"]
+    BACKENDS["db.py · db_edit.py · dbtools.py (databases) · sharing.py (proxy, tunnels) · fileshare.py · backups.py · build.py · compose_check.py"]
     DOCKER[("Docker / Podman")]
     APP --> PAGES --> WIDGETS
     PAGES -- "requests" --> POOL --> ENGINE --> DOCKER
@@ -75,6 +75,19 @@ One `Backend` per engine with the same small interface — `connect`, `databases
   the page closes). Each backend enforces read-only at the lowest level it can (server-side read-only transactions for
   Postgres, read-only session + statement check for MySQL, allow-lists for Redis and HTTP, EJSON-only filters and no
   shell for MongoDB).
+- **Editing (`db_edit.py`).** One `Editor` per engine: `annotate` decides how a row is picked out (primary key, a
+  hash field, a document id) or says why it can't be edited; `fetch` returns every value in full; `save` / `delete`
+  change one row and report a row that changed meanwhile instead of overwriting it. Values travel as data — quoted
+  literals, hex literals (MySQL), separate argv items (Redis), env variables (MongoDB), JSON bodies — and through a
+  file in the container's `/tmp` when they are too large for a command line.
+- **Whole tables and databases (`dbtools.py`).** Export streams `row_to_json` / `JSON_OBJECT` / `EJSON` lines straight
+  to a file (`engine.exec_to_file`), then writes CSV or JSON. Import goes through `\copy` (Postgres), batched hex
+  `INSERT`s in one transaction (MySQL) or `insertMany` (MongoDB). Backups use the image's own dump tool
+  (`pg_dump -Fc`, `mysqldump`, `mongodump --archive`, `redis-cli --rdb`); restores use the matching restore tool (Redis:
+  stop, put the RDB in place, start).
+- **Reaching HTTP engines** without curl in the image: a short-lived `curlimages/curl` helper in the target's network
+  namespace (`NetworkMode: container:<id>`, labelled `…berth.helper=http`) — needed on Docker Desktop, where container
+  IPs aren't routable.
 - **SQLite** is a copy: fetched with the archive API (plus `-wal` / `-shm`), folded into a private temp file and
   opened `mode=ro`; removed when the explorer closes.
 
@@ -87,3 +100,33 @@ One `Backend` per engine with the same small interface — `connect`, `databases
 - **Public links**: one `cloudflared` container per shared port with `NetworkMode: container:<target>`, labelled
   `io.berth.role=tunnel`; the quick-tunnel URL is read from its log. `App.do_shutdown` removes every tunnel not
   labelled `io.berth.keep=1`.
+
+## Backups (`backups.py`, `backups_page.py`)
+
+Schedules live in settings; what happened (last run, result) in a separate state file, so the app and
+`berth --run-backups` (a systemd user timer on Linux, installed only once a schedule exists) never overwrite each
+other. A lock file keeps two runs apart; files are named `<target>[-<db>]-<timestamp>.<ext>`, so pruning to "keep the
+newest N" only ever touches a schedule's own files.
+
+## Stacks and the Compose check (`stacks_page.py`, `compose_check.py`)
+
+Stacks come from container labels plus the projects Berth started (remembered in settings, so a stack that was taken
+down stays listed). The check runs `docker compose config --format json` (syntax, interpolation, unset variables) and
+then compares the result with this computer: published ports in use by other containers or programs, taken container
+names, build folders, env files, external volumes and networks.
+
+## Engines on other machines and systems
+
+- **SSH** (`sshtunnel.py`): one `ssh -N -L 127.0.0.1:<port>:/var/run/docker.sock` per remote engine with the system's
+  OpenSSH and the user's keys; Berth then talks to the local port. The docker CLI follows `DOCKER_HOST=ssh://…` itself.
+- **Windows named pipe** (`engine._PipeSock`): Docker Desktop's `\\.\pipe\docker_engine` wrapped so `http.client` and
+  streams can use it — reads on a helper thread once the request is written (a synchronous pipe can't read and write
+  at once), timeouts without `select()`, and `close()` cancels a waiting read.
+
+## Testing
+
+`tests/connect.py` (every engine against real Docker), `tests/drive.py` and `tests/clickall.py` (the app driven
+off-screen against the demo engine from `tools/demo/up.sh`; both refuse any other engine), `tools/ui_audit.py` and
+`tools/walkthrough.py` (screenshots of every screen and every engine, `tools/demo/engines.py` starts one seeded engine
+at a time), `tests/ssh.py`, `tests/fileshare.py`, `tools/pipe_check.py` (Windows), `tools/distro_test.sh` (five Linux
+distributions through the installer) and `berth --self-test`. CI runs all of them.

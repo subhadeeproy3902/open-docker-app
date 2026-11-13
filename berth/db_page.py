@@ -946,8 +946,9 @@ class Explorer(Gtk.Box):
         self.ren.add_css_class("flat")
         self.ren.connect("clicked", lambda *_: self._rename_node())
         top.append(self.ren)
+        filters = None
         if backend.kind in ("postgres", "mysql"):
-            self.wfilter = Gtk.Entry(placeholder_text="Filter rows, e.g. status = 'paid' and total > 10",
+            self.wfilter = Gtk.Entry(placeholder_text="Filter rows — a condition, e.g. status = 'paid' and total > 10",
                                      width_chars=36, primary_icon_name="system-search-symbolic",
                                      secondary_icon_tooltip_text="Clear the filter",
                                      tooltip_text="An SQL condition (what follows WHERE). Press Enter to apply; it "
@@ -958,12 +959,12 @@ class Explorer(Gtk.Box):
                 Gtk.EntryIconPosition.SECONDARY, "edit-clear-symbolic" if e.get_text() else None))
             self.wfilter.connect("icon-release", lambda e, pos: pos == Gtk.EntryIconPosition.SECONDARY and (
                 e.set_text(""), self._apply_where()))
-            top.append(self.wfilter)
+            filters = self.wfilter
         if backend.kind == "mongo":
             self.mfilter = Gtk.Entry(placeholder_text='Filter, e.g. {"status": "active"}', width_chars=34)
             self.mfilter.add_css_class("monospace")
             self.mfilter.connect("activate", lambda *_: self._apply_filter())
-            top.append(self.mfilter)
+            filters = self.mfilter
         top.append(Gtk.Box(hexpand=True))
         self.add_btn = Gtk.Button(visible=False, valign=Gtk.Align.CENTER)
         self.add_btn.set_child(Adw.ButtonContent(icon_name="list-add-symbolic", label="Add row"))
@@ -1000,6 +1001,9 @@ class Explorer(Gtk.Box):
             w.set_visible(False)
             top.append(w)
         data.append(top)
+        if filters is not None:                         # its own line: the bar above keeps room for the name
+            filters.set_hexpand(True)
+            data.append(filters)
         self.data = ResultGrid(self.win, explorer=self, what=self.ed.unit)
         data.append(self.data)
         self.views.add_titled_with_icon(data, "data", "Data", "view-grid-symbolic")

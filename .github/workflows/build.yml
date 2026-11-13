@@ -228,7 +228,8 @@ jobs:
           {
             echo '<p align="center"><img src="https://raw.githubusercontent.com/${{ github.repository }}/${{ github.ref_name }}/data/icons/berth-512.png" width="128" alt="Berth"></p>'
             echo
-            awk '/^## \[/{n++} n==1' CHANGELOG.md | tail -n +2
+            V="${GITHUB_REF_NAME#v}"      # the section for this tag (not "Unreleased")
+            awk -v v="$V" '/^## \[/{p = (index($0, "[" v "]") > 0)} p' CHANGELOG.md | tail -n +2
           } > notes.md
       - uses: softprops/action-gh-release@v3
         with:

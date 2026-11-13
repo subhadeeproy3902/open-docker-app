@@ -473,7 +473,9 @@ class Window(Adw.ApplicationWindow):
                s["alert_mem"], s["alert_disk"], done=shown, error=lambda e: self._watch_busy.discard("alerts"))
         if s["ai_idle_stop"] and "ai" not in self._watch_busy:      # Local AI: stop Ollama after a while unused
             from . import ai
-            if now - ai.last_use() > s["ai_idle_stop"] * 60 and any(
+            if not ai.last_use():                     # no record yet (first run, or started outside): start the clock
+                ai.touch()
+            elif now - ai.last_use() > s["ai_idle_stop"] * 60 and any(
                     f"/{ai.NAME}" in (c.get("Names") or []) and c.get("State") == "running" for c in st.containers):
                 self._watch_busy.add("ai")
                 bg(ai.stop, st.engine, done=lambda _r: (self._watch_busy.discard("ai"),

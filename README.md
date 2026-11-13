@@ -113,7 +113,9 @@ arrives; there are no animations or timers while idle. A *Software rendering* sw
 | <img src="docs/screenshots/images-dark.png" alt="Images"> **Images** — in use / unused / dangling, Docker Hub search & pull with progress, run with ports/env/volumes, vulnerability scan, tag, push, save / load. | <img src="docs/screenshots/settings-light.png" alt="Settings"> **Settings** — light / dark / system theme, **accessibility** (text size 85–150 %, compact / comfortable / spacious density, stronger borders and contrast, larger icons, reduce motion), resource saver, engine switcher, registry sign-in, `daemon.json` editor, optional tray icon. |
 | <img src="docs/screenshots/databases-dark.png" alt="Database explorer"> **Databases** — browse and query **PostgreSQL, MySQL / MariaDB, Redis / Valkey, MongoDB, Vespa, OpenSearch / Elasticsearch, Typesense, Meilisearch** and SQLite files in your containers: tables / keys / collections / indices, paged data, structure and indexes, a query console with history, **edit rows, keys and documents** (click a row to open it in full, double-click a cell), sort and filter on the server, export or import a whole table as CSV / JSON. No drivers and no extra ports (Berth uses the client inside the image), **read-only unless you switch on “Allow changes”**. | <img src="docs/screenshots/sharing-light.png" alt="Ports and sharing"> **Ports & sharing** — give a container a friendly address like `https://shop.localhost` (one small local proxy, on 127.0.0.1 only), **share a port publicly** with a Cloudflare Tunnel link (no account needed; stops when Berth quits unless you keep it), and see every published port, with a warning on the ones open to your whole network. |
 | <img src="docs/screenshots/stacks-light.png" alt="Stacks"> **Stacks** — every Compose project, also ones taken down: up, down, restart, pull & recreate, edit, logs, and a **Compose check** that catches port clashes, unset variables and missing files before anything starts. | <img src="docs/screenshots/backups-dark.png" alt="Backups"> **Backups** — databases (pg_dump, mysqldump, mongodump, Redis) and volumes, right now or on a schedule; keep the newest few; restore with one click. |
-| <img src="docs/screenshots/send-dark.png" alt="Send files"> **Send files** — share files or a folder with a phone: a Wi-Fi link and QR code, PIN, expiry, download limit; receive files from a phone too. | |
+| <img src="docs/screenshots/send-dark.png" alt="Send files"> **Send files** — share files or a folder with a phone: a Wi-Fi link and QR code, PIN, expiry, download limit; receive files from a phone too. | <img src="docs/screenshots/split-view-dark.png" alt="Split view"> **Split view and windows** — two containers side by side with all their tabs, or a container in its own window; each streams only while visible. |
+| <img src="docs/screenshots/graph-light.png" alt="Dependency graph"> **Dependency graph** — a stack's services with state, `depends_on` arrows and their conditions, networks and volumes; click a service to open it. | <img src="docs/screenshots/network-map-dark.png" alt="Network map"> **Network map** — networks with their containers, IPs, published ports and live traffic, plus a reachability check: *can `web` reach `api` on port 8000?* |
+| <img src="docs/screenshots/registries-dark.png" alt="Registries"> **Registries** — browse Docker Hub and any Registry v2 registry: tags with digest, size, platforms, whether your copy matches; pull, copy to another registry, delete tags. | <img src="docs/screenshots/local-ai-dark.png" alt="Local AI"> **Local AI** — open models with Ollama on your own computer: pick one by size and memory, download, chat, and use its OpenAI-compatible address in other apps. Plus an **MCP server** (`berth --mcp`) so AI assistants can read your containers and logs. |
 
 **Everything else**
 
@@ -123,6 +125,14 @@ arrives; there are no animations or timers while idle. A *Software rendering* sw
 - **Notifications** when a container crashes, runs out of memory or turns unhealthy, or a backup fails.
 - **Images**: build from a folder with a Dockerfile, see which tags have a newer version, update and recreate their containers in one click.
 - **Remote engines over SSH** (`ssh://user@host`, your SSH keys) next to local sockets and `tcp://`.
+- **Safe updates**: scan the new image version with Trivy first and keep the current one if the new one brings critical or high vulnerabilities; scheduled scans and a Security column on Images.
+- **Alerts**: a notification when a container stays above a CPU limit, nears its memory limit, or Docker's disk runs low.
+- **Templates and Dockerize**: 13 one-click stacks (Postgres, MariaDB, Redis, MongoDB, S3 storage, RabbitMQ, Redpanda, OpenSearch, Vespa, Meilisearch, Ollama, Nginx, Traefik), and a Dockerfile + compose.yaml for a Node, Python, Go, Java or static project.
+- **Environment and secrets** per stack: every variable and where it comes from, secrets masked, differences between services, `.env` editing that recreates only what changed.
+- **Structured logs**: JSON and `key=value` fields you can click to filter, saved filters, pause, export to text / JSON / CSV, stack traces grouped.
+- **App metrics**: a Metrics tab charts a container's own Prometheus `/metrics` endpoint.
+- **Image layers**: where an image's size goes, layer by layer.
+- **Databases outside Docker** from a connection string, query tabs, saved queries and schema editing (tables, columns, indexes).
 
 - **Containers** grouped by Compose project; start / stop / restart / pause / delete one container or a whole stack; ports open in your browser.
 - **Container details**: Logs · Inspect (environment values hidden until you ask) · Mounts · **Exec** (built-in terminal with VTE) · Files · Stats.
@@ -264,11 +274,12 @@ notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - [x] Native Windows named-pipe support (no TCP setting needed) — 1.3
 - [x] SSH remote engines (`ssh://user@host`) — 1.3
 - [x] Database and volume backups on a schedule, with restore — 1.3
-- [ ] SQL editor: several tabs, saved queries, cancel a running query
-- [ ] Schema editing (create tables, columns, indexes) and following foreign keys
-- [ ] Image layer explorer (files per layer, wasted space)
-- [ ] Compose graph view (services, networks, volumes, depends_on)
-- [ ] Resource alerts (notify when CPU / memory / disk crosses a threshold — crashes and failed backups notify already)
+- [x] SQL editor: several tabs, saved queries — 1.4 (cancelling a running query: still open)
+- [x] Schema editing (create tables, columns, indexes) — 1.4 (following foreign keys: still open)
+- [x] Image layer explorer (size per layer) — 1.4 (files per layer: still open)
+- [x] Compose graph view (services, networks, volumes, depends_on) — 1.4
+- [x] Resource alerts (CPU / memory / disk thresholds) — 1.4
+- [x] Registry browser, templates, Dockerize, network map, environment manager, app metrics, local AI + MCP — 1.4
 - [ ] More Kubernetes resources (ConfigMaps, Secrets, Ingress, Jobs)
 - [ ] Translations of the app UI (Chinese, Japanese, …)
 

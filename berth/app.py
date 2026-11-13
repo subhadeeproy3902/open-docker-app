@@ -21,6 +21,7 @@ from .sharing_page import SharingPage  # noqa: E402
 from .send_page import SendPage  # noqa: E402
 from .backups_page import BackupsPage  # noqa: E402
 from .stacks_page import StacksPage  # noqa: E402
+from .registry_page import RegistryPage  # noqa: E402
 from . import theme  # noqa: E402
 from .theme import apply_accessibility  # noqa: E402
 from .files import cleanup_helpers  # noqa: E402
@@ -36,7 +37,7 @@ PAGES = [("containers", ContainersPage), ("stacks", StacksPage), ("images", Imag
          ("backups", BackupsPage),
          ("databases", DatabasesPage), ("sharing", SharingPage), ("send", SendPage),
          ("logs", LogsPage), ("resources", ResourcesPage), ("disk", DiskPage),
-         ("builds", BuildHistoryPage), ("cache", BuildsPage),
+         ("builds", BuildHistoryPage), ("cache", BuildsPage), ("registries", RegistryPage),
          ("kubernetes", K8sPage),
          ("settings", SettingsPage)]
 # Sidebar sections: the first page of each group gets a small heading; Settings sits apart at the bottom.

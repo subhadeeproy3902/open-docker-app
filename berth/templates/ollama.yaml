@@ -1,0 +1,21 @@
+# title: Ollama + Open WebUI
+# description: Run open models locally with Ollama, chat with them in Open WebUI. Models are kept in a volume.
+# open: http://localhost:3000
+services:
+  ollama:
+    image: ollama/ollama:latest
+    ports: ["127.0.0.1:11434:11434"]
+    volumes: [ollama:/root/.ollama]
+    restart: unless-stopped
+  webui:
+    image: ghcr.io/open-webui/open-webui:main
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+      WEBUI_AUTH: "false"
+    ports: ["127.0.0.1:3000:8080"]
+    volumes: [webui:/app/backend/data]
+    depends_on: [ollama]
+    restart: unless-stopped
+volumes:
+  ollama:
+  webui:

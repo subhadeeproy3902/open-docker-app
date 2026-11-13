@@ -4,7 +4,7 @@ import os
 from gi.repository import Adw, Gio, GLib, Gtk
 
 from .cli import CommandDialog
-from .util import follow_content, bg, confirm, esc, labels
+from .util import follow_content, bg, confirm, esc, labels, open_uri
 
 
 ICONS = {"error": "dialog-error-symbolic", "warning": "dialog-warning-symbolic", "info": "dialog-information-symbolic"}
@@ -248,8 +248,17 @@ class ComposeOpen(Adw.Dialog):
             self._check()
         d.open(self.win, None, done)
 
+    def use_file(self, path, name, url=None):
+        """Open with a file already chosen (templates, Dockerize): the check and the summary run at once."""
+        self.file, self.url = path, url
+        self.file_row.set_subtitle(esc(path))
+        self.name.set_text(name)
+        self.go.set_sensitive(True)
+        self._check()
+
     def _check(self):
         from . import compose_check
+        self._summary()
         st = self.store
         for r in self._check_rows:
             self.checks.remove(r)
@@ -260,6 +269,37 @@ class ComposeOpen(Adw.Dialog):
         f = self.file
         bg(lambda: compose_check.check([f], *check_inputs(st), name),
            done=lambda res: show_checks(self.checks, self._check_rows, res), error=lambda e: None)
+
+    def _summary(self):
+        """What the file will create: services with their image and ports, and the volumes (#31)."""
+        from . import compose_check
+        if getattr(self, "_sum", None) is None:
+            self._sum = Adw.PreferencesGroup(title="It creates")
+            self.checks.get_parent().insert_child_after(self._sum, self.checks.get_prev_sibling())
+            self._sum_rows = []
+        for r in self._sum_rows:
+            self._sum.remove(r)
+        self._sum_rows = []
+        f = self.file
+
+        def show(res):
+            cfg, err = res
+            rows = []
+            for svc, d in sorted(((cfg or {}).get("services") or {}).items()):
+                ports = ", ".join(f"{p.get('host_ip', '') + ':' if p.get('host_ip') else ''}{p.get('published')}→"
+                                  f"{p.get('target')}" for p in d.get("ports") or [] if p.get("published"))
+                rows.append(Adw.ActionRow(title=esc(svc), subtitle=esc(" · ".join(x for x in (
+                    d.get("image") or ("built from " + str((d.get("build") or {}).get("context", "."))),
+                    ports and f"ports {ports}") if x))))
+            vols = sorted(((cfg or {}).get("volumes") or {}).keys())
+            if vols:
+                rows.append(Adw.ActionRow(title="Volumes", subtitle=esc(", ".join(vols) + " (data is kept on compose down)")))
+            if cfg is None:
+                rows.append(Adw.ActionRow(title="Can't read the file", subtitle=esc(err[:300])))
+            for r in rows:
+                self._sum.add(r)
+            self._sum_rows = rows
+        bg(lambda: compose_check.config([f]), done=show, error=lambda e: None)
 
     def _go(self):
         name = self.name.get_text().strip() or "stack"
@@ -273,5 +313,13 @@ class ComposeOpen(Adw.Dialog):
             argv += ["--pull", "always"]
         self.close()
         remember(name, os.path.dirname(self.file), [self.file])
+        url = getattr(self, "url", None)
+
+        def done(ok):
+            self.store.refresh("containers")
+            if ok and url:                       # templates say where to look
+                t = Adw.Toast(title=f"{name} is running", button_label="Open", timeout=8)
+                t.connect("button-clicked", lambda *_: open_uri(url))
+                self.win.toasts.add_toast(t)
         CommandDialog(self.win, f"Compose up · {name}", argv, cwd=os.path.dirname(self.file),
-                      on_done=lambda ok: self.store.refresh("containers")).present(self.win)
+                      on_done=done).present(self.win)

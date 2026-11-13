@@ -1,0 +1,23 @@
+# title: OpenSearch + Dashboards
+# description: One OpenSearch node (security plugin off, for local use only) and OpenSearch Dashboards. Needs about 1.5 GB of memory.
+# open: http://localhost:5601
+services:
+  opensearch:
+    image: opensearchproject/opensearch:2
+    environment:
+      discovery.type: single-node
+      DISABLE_SECURITY_PLUGIN: "true"
+      OPENSEARCH_JAVA_OPTS: -Xms512m -Xmx512m
+    ports: ["127.0.0.1:9200:9200"]
+    volumes: [opensearch:/usr/share/opensearch/data]
+    restart: unless-stopped
+  dashboards:
+    image: opensearchproject/opensearch-dashboards:2
+    environment:
+      OPENSEARCH_HOSTS: '["http://opensearch:9200"]'
+      DISABLE_SECURITY_DASHBOARDS_PLUGIN: "true"
+    ports: ["127.0.0.1:5601:5601"]
+    depends_on: [opensearch]
+    restart: unless-stopped
+volumes:
+  opensearch:

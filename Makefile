@@ -13,6 +13,8 @@ BINDIR   = $(PREFIX)/bin
 install:
 	install -d $(DESTDIR)$(DATADIR)/berth $(DESTDIR)$(BINDIR)
 	install -m644 berth/*.py berth/style.css $(DESTDIR)$(DATADIR)/berth/
+	install -d $(DESTDIR)$(DATADIR)/berth/templates
+	install -m644 berth/templates/*.yaml $(DESTDIR)$(DATADIR)/berth/templates/
 	sed -e 's|@DATADIR@|$(DATADIR)|' -e 's|@ICON@|$(ICON)|' bin/berth.in > $(DESTDIR)$(BINDIR)/berth
 	chmod 755 $(DESTDIR)$(BINDIR)/berth
 	install -d $(DESTDIR)$(PREFIX)/share/applications

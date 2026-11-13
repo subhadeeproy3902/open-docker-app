@@ -1,0 +1,12 @@
+# title: SeaweedFS (S3 storage)
+# description: S3-compatible object storage on port 8333 (no keys: local use only), with the filer's web view.
+# open: http://localhost:8888
+services:
+  seaweedfs:
+    image: chrislusf/seaweedfs:latest
+    command: ["server", "-dir=/data", "-s3", "-s3.port=8333", "-filer"]
+    ports: ["127.0.0.1:8333:8333", "127.0.0.1:8888:8888", "127.0.0.1:9333:9333"]
+    volumes: [seaweedfs:/data]
+    restart: unless-stopped
+volumes:
+  seaweedfs:

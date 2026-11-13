@@ -784,14 +784,91 @@ class ImageDetail(Adw.NavigationPage):
                      ("Used by", ", ".join(self.d["used"]) or "no containers")):
             g.add(Adw.ActionRow(title=t, subtitle=esc(v), subtitle_selectable=True))
         self.pp.add(g)
-        lg = Adw.PreferencesGroup(title="Layers", description="How the image was built, newest step first.")
-        for h in hist[:200]:
-            cmd = (h.get("CreatedBy") or "").replace("/bin/sh -c #(nop) ", "").replace("/bin/sh -c ", "RUN ").strip()
-            r = Adw.ActionRow(title=esc(cmd[:160] or "—"), subtitle=f"{fmt_bytes(h.get('Size', 0))} · {ago(h.get('Created', 0))}",
-                              title_lines=2, subtitle_selectable=False)
-            r.add_css_class("monospace-title")
-            lg.add(r)
-        self.pp.add(lg)
+        self.pp.add(layer_group(hist))
+
+
+def _layer_cmd(h):
+    """The Dockerfile step: classic builder "/bin/sh -c #(nop) CMD …" / "/bin/sh -c apk add …", BuildKit
+    "RUN /bin/sh -c apk add … # buildkit" and "|2 A=1 B=2 /bin/sh -c …" (build args)."""
+    c = re.sub(r"^\|\d+ (?:\S+=\S* )*", "RUN ", (h.get("CreatedBy") or "").strip())
+    c = c.replace("/bin/sh -c #(nop) ", "").replace("RUN /bin/sh -c ", "RUN ").replace("RUN RUN ", "RUN ")
+    c = c.replace("/bin/sh -c ", "RUN ")
+    return re.sub(r"\s*# buildkit$", "", c).strip()
+
+
+class SizeBar(Gtk.DrawingArea):
+    """One horizontal bar split into the image's biggest layers (#13): where the size goes, at a glance."""
+
+    def __init__(self, parts):
+        super().__init__(content_height=22, hexpand=True)
+        self.parts = parts                     # [(share 0..1, colour index)]
+        self.set_draw_func(self._draw)
+
+    def _draw(self, _a, cr, w, h):
+        pal = charts.palette()
+        x, r = 0.0, 6
+        cr.new_sub_path()
+        cr.arc(r, r, r, 3.1416, 4.7124)
+        cr.arc(w - r, r, r, 4.7124, 0)
+        cr.arc(w - r, h - r, r, 0, 1.5708)
+        cr.arc(r, h - r, r, 1.5708, 3.1416)
+        cr.close_path()
+        cr.clip()
+        for share, ci in self.parts:
+            cr.set_source_rgba(*charts.rgb(pal[ci % len(pal)] if ci >= 0 else "#77767b", 0.9 if ci >= 0 else 0.35))
+            cr.rectangle(x, 0, max(1.0, share * w), h)
+            cr.fill()
+            x += share * w
+
+
+def layer_group(hist):
+    """The layers of an image (#13): newest step first, size and share of each, the biggest ones highlighted, and a bar
+    that shows where the size goes. Metadata-only steps (ENV, CMD, …) are 0 B and dimmed."""
+    total = sum(h.get("Size", 0) for h in hist) or 1
+    big = sorted((i for i, h in enumerate(hist) if h.get("Size", 0) > 0), key=lambda i: -hist[i]["Size"])[:5]
+    colour = {i: n for n, i in enumerate(big)}
+    rest = total - sum(hist[i]["Size"] for i in big)
+    parts = [(hist[i]["Size"] / total, colour[i]) for i in big] + ([(rest / total, -1)] if rest > 0 else [])
+    g = Adw.PreferencesGroup(title="Layers", description=f"{len(hist)} build steps, newest first · {fmt_bytes(total)} "
+                             f"in {sum(1 for h in hist if h.get('Size', 0))} layers that hold files")
+    head = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8, margin_bottom=10)
+    head.append(Gtk.Label(label="Where does the size go?", xalign=0, css_classes=["heading"]))
+    head.append(SizeBar(parts))
+    legend = Adw.WrapBox(child_spacing=14, line_spacing=4)
+    pal = charts.palette()
+    for i in big:
+        item = Gtk.Box(spacing=6)
+        dot = Gtk.Label(label="●")
+        dot.set_markup(f"<span foreground='{pal[colour[i] % len(pal)]}'>●</span>")
+        item.append(dot)
+        item.append(Gtk.Label(label=f"{fmt_bytes(hist[i]['Size'])} · {_layer_cmd(hist[i])[:48] or 'base layer'}",
+                              css_classes=["caption"], ellipsize=Pango.EllipsizeMode.END, max_width_chars=60))
+        legend.append(item)
+    if rest > 0:
+        legend.append(Gtk.Label(label=f"● {fmt_bytes(rest)} · everything else", css_classes=["caption", "dim-label"]))
+    head.append(legend)
+    wrap = Adw.PreferencesRow(activatable=False, focusable=False)
+    head.set_margin_top(12)
+    head.set_margin_start(12)
+    head.set_margin_end(12)
+    wrap.set_child(head)
+    g.add(wrap)
+    for i, h in enumerate(hist[:200]):
+        size = h.get("Size", 0)
+        r = Adw.ActionRow(title=esc(_layer_cmd(h)[:160] or "—"),
+                          subtitle=(f"{fmt_bytes(size)} · {size / total * 100:.0f} % · " if size else "no files · ")
+                          + ago(h.get("Created", 0)), title_lines=2, subtitle_selectable=False)
+        r.add_css_class("monospace-title")
+        if i in colour:
+            pill = Gtk.Label(label="biggest" if colour[i] == 0 else f"#{colour[i] + 1}", valign=Gtk.Align.CENTER,
+                             css_classes=["status-pill", "warn" if colour[i] == 0 else "muted"])
+            r.add_suffix(pill)
+        elif not size:
+            r.add_css_class("dim-label")
+        g.add(r)
+    if len(hist) > 200:
+        g.add(Adw.ActionRow(title=f"… and {len(hist) - 200} more steps"))
+    return g
 
 
 class PullDialog(Adw.Dialog):

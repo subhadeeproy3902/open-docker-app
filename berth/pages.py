@@ -1521,10 +1521,26 @@ class BuildHistoryPage(TablePage):
         self.stack.set_visible_child_name("loading")
 
         def work():
-            out = run_capture(["docker", "buildx", "history", "ls", "--format", "{{json .}}"], 60)
+            try:
+                out = run_capture(["docker", "buildx", "history", "ls", "--format", "{{json .}}"], 60)
+            except FileNotFoundError:
+                return "Build history needs the docker command, which isn't installed here."
+            except RuntimeError as e:
+                m = str(e)
+                if any(x in m for x in ("unknown flag", "is not a docker command", "unknown command", "buildx")):
+                    return ("Build history comes from Docker Buildx, which this engine doesn't have (Docker Desktop "
+                            "includes it; on Linux install the docker-buildx package).")
+                raise
             return [json.loads(ln) for ln in out.splitlines() if ln.strip().startswith("{")]
 
         def done(rows):
+            if isinstance(rows, str):                  # not available here: say why instead of an error
+                self.set_rows([], self.c_started)
+                self.note.set_text(rows)
+                self.note.set_visible(True)
+                self.wtitle.set_subtitle("Not available with this engine")
+                return
+            self.note.set_visible(False)
             self.set_rows([Row("build", b.get("ref", str(i)), b) for i, b in enumerate(rows)], self.c_started)
             self.wtitle.set_subtitle(f"{len(rows)} builds · {sum(1 for b in rows if b.get('status') != 'Completed')} not completed")
         bg(work, done=done, error=lambda e: (self.set_rows([]), self.win.toast(f"Build history: {e}")))

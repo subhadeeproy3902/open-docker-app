@@ -23,6 +23,7 @@ from .backups_page import BackupsPage  # noqa: E402
 from .stacks_page import StacksPage  # noqa: E402
 from .registry_page import RegistryPage  # noqa: E402
 from .ai import AiPage  # noqa: E402
+from .otel import TracesPage  # noqa: E402
 from . import theme  # noqa: E402
 from .theme import apply_accessibility  # noqa: E402
 from .files import cleanup_helpers  # noqa: E402
@@ -37,7 +38,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 PAGES = [("containers", ContainersPage), ("stacks", StacksPage), ("images", ImagesPage), ("volumes", VolumesPage), ("networks", NetworksPage),
          ("backups", BackupsPage),
          ("databases", DatabasesPage), ("sharing", SharingPage), ("send", SendPage), ("ai", AiPage),
-         ("logs", LogsPage), ("resources", ResourcesPage), ("disk", DiskPage),
+         ("logs", LogsPage), ("traces", TracesPage), ("resources", ResourcesPage), ("disk", DiskPage),
          ("builds", BuildHistoryPage), ("cache", BuildsPage), ("registries", RegistryPage),
          ("kubernetes", K8sPage),
          ("settings", SettingsPage)]
@@ -145,7 +146,7 @@ class Window(Adw.ApplicationWindow):
         off.add_top_bar(Adw.HeaderBar())
         self.off_page = Adw.StatusPage(icon_name=app_icon(), title="Docker Engine is not running",
                                        description="Berth needs a running Docker Engine.")
-        start = Gtk.Button(label="Start Docker Engine", halign=Gtk.Align.CENTER)
+        start = self.off_start = Gtk.Button(label="Start Docker Engine", halign=Gtk.Align.CENTER)
         start.add_css_class("pill")
         start.add_css_class("suggested-action")
         start.connect("clicked", lambda *_: self._engine_start())
@@ -288,6 +289,7 @@ class Window(Adw.ApplicationWindow):
     def _engine(self, up):
         self.engine_dot.set_css_classes(["dot", "running" if up else "exited"])
         self.engine_lbl.set_text("Engine running" if up else "Engine stopped")
+        self._engine_busy(False)                       # the engine changed state: the action is done
         self.engine_btn.set_icon_name("system-shutdown-symbolic")
         self.engine_btn.set_tooltip_text("Stop Docker Engine" if up else "Start Docker Engine")
         self.sb_engine.set_text("● Engine running" if up else "● Engine stopped")
@@ -304,11 +306,11 @@ class Window(Adw.ApplicationWindow):
     def _systemctl(self, verb):
         if sys.platform != "linux":
             self.toast("Start or stop Docker from Docker Desktop, Colima, OrbStack or Rancher Desktop")
-            return
+            return False
         path = self.store.engine.path
-        if path.startswith("tcp://"):
+        if path.startswith(("tcp://", "ssh://")):
             self.toast("This is a remote engine — start or stop it on that machine")
-            return
+            return False
         unit = "podman.socket" if "podman" in path else "docker"
         if path.startswith(GLib.get_user_runtime_dir()):
             spawn(["systemctl", "--user", verb, unit])
@@ -319,16 +321,25 @@ class Window(Adw.ApplicationWindow):
         else:
             spawn(["pkexec", "systemctl", "stop", "docker.socket", "docker.service"])
 
+    def _engine_busy(self, on):
+        from .util import set_busy
+        for b in (self.engine_btn, getattr(self, "off_start", None)):
+            set_busy(b, on, "Working…")
+        if on:
+            GLib.timeout_add_seconds(60, lambda: self._engine_busy(False) and False)
+
     def _engine_start(self):
         self.toast("Starting Docker Engine — your system may ask for your password")
-        self._systemctl("start")
+        if self._systemctl("start") is not False:
+            self._engine_busy(True)
 
     def engine_toggle(self):
         if not self.store.up:
             return self._engine_start()
         from .util import confirm
         confirm(self, "Stop Docker Engine?", "Every running container stops. Your system asks for your password.",
-                "Stop Engine", lambda: (self._systemctl("stop"), self.toast("Stopping Docker Engine…")))
+                "Stop Engine", lambda: (self._systemctl("stop") is not False and self._engine_busy(True),
+                                        self.toast("Stopping Docker Engine…")))
 
     def _sweep_links(self):
         """Remove public links whose expiry time has passed. No engine call unless such a link exists."""
@@ -471,12 +482,20 @@ class Window(Adw.ApplicationWindow):
                     self.notify(title, body, key=key)
             bg(self.alerts.check, st.engine, list(st.containers or []), dict(st.info or {}), s["alert_cpu"],
                s["alert_mem"], s["alert_disk"], done=shown, error=lambda e: self._watch_busy.discard("alerts"))
+        if s["history"] and "history" not in self._watch_busy:   # metrics history (#28), opt-in
+            from . import history
+            if not hasattr(self, "recorder"):
+                self.recorder = history.Recorder()
+            self._watch_busy.add("history")
+            bg(self.recorder.tick, st.engine, list(st.containers or []), s["history_days"] or 7,
+               done=lambda _n: self._watch_busy.discard("history"),
+               error=lambda e: self._watch_busy.discard("history"))
         if s["ai_idle_stop"] and "ai" not in self._watch_busy:      # Local AI: stop Ollama after a while unused
             from . import ai
-            if not ai.last_use():                     # no record yet (first run, or started outside): start the clock
+            up = any(f"/{ai.NAME}" in (c.get("Names") or []) and c.get("State") == "running" for c in st.containers)
+            if up and not ai.last_use():              # running but never used through Berth: start the clock now
                 ai.touch()
-            elif now - ai.last_use() > s["ai_idle_stop"] * 60 and any(
-                    f"/{ai.NAME}" in (c.get("Names") or []) and c.get("State") == "running" for c in st.containers):
+            elif up and now - ai.last_use() > s["ai_idle_stop"] * 60:
                 self._watch_busy.add("ai")
                 bg(ai.stop, st.engine, done=lambda _r: (self._watch_busy.discard("ai"),
                                                        self.notify("Local AI stopped", "Ollama wasn't used for a while; "
@@ -723,13 +742,15 @@ class App(Adw.Application):
 
         def steps():
             for key, _cls in PAGES:
+                print(f"self-test: page {key}", flush=True)     # so a crash shows where it happened
                 w.go(key)
                 yield 400
             try:
                 dialogs.extend(make())
             except Exception as e:                  # an import that fails in a packaged build
                 errors.append(f"dialogs: {e}")
-            for mk in dialogs:
+            for n, mk in enumerate(dialogs):
+                print(f"self-test: dialog {n + 1}/{len(dialogs)}", flush=True)
                 try:
                     d = mk()
                     d.present(w)
@@ -834,6 +855,8 @@ def main(argv=None):
         del argv[i:i + 2]
     if "--self-test" in argv:
         argv.remove("--self-test")
+        import faulthandler                       # a native crash prints the Python stack instead of a bare exit code
+        faulthandler.enable()
         for k in ("BERTH_SELF_TEST", "BERTH_NO_WELCOME", "BERTH_NO_UPDATE_CHECK"):
             os.environ[k] = "1"
     app = App(shot, page)

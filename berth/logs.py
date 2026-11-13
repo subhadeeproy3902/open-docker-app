@@ -419,7 +419,12 @@ class LogsExplorer(Gtk.Box):
                 return
             self.entries = res
             self.status.set_text("")
-            self.render()
+            z = getattr(self, "_pending_zoom", None)
+            if z:
+                self._pending_zoom = None
+                self._set_zoom(*z)
+            else:
+                self.render()
             if live:
                 self._start_live(srcs)
         bg(work, done=done, error=lambda e: self.status.set_text(f"Could not read logs: {e}"))
@@ -586,6 +591,16 @@ class LogsExplorer(Gtk.Box):
         pal = charts.palette()
         self.src_tags = [self.buf.create_tag(None, foreground_rgba=_rgba(pal[i % len(pal)]), weight=Pango.Weight.BOLD)
                          for i in range(len(self.names))]
+
+    def show_time(self, t, around=150):
+        """Pick the shortest range that reaches back to t, load it, then zoom to t ± around seconds."""
+        ago = time.time() - t + around
+        name = next((n for n, _l, secs in RANGES if n != "live" and secs >= ago), RANGES[-1][0])
+        self._pending_zoom = (t - around, t + around)
+        if self.range.get_active_name() == name:
+            self.reload()
+        else:
+            self.range.set_active_name(name)
 
     def _set_zoom(self, a, b=None):
         self.zoom = (a, b) if a is not None else None
@@ -828,6 +843,12 @@ class LogsPage(Gtk.Box):
         names = [n for n, *_ in new]
         if cur in names:
             self.picker.set_selected(names.index(cur))
+
+    def show_time(self, t):
+        """All running containers' logs around a moment (from a click on a Resource usage chart, #28)."""
+        self._choices()
+        self.picker.set_selected(0)
+        self.explorer.show_time(t)
 
     def show_project(self, project):
         """Open the page on one Compose stack's logs (from the Stacks page)."""

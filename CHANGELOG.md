@@ -5,6 +5,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-11-13
+
+Berth grows from a Docker desktop into a place to build, watch and fix what you run: safer updates, alerts and
+history, several containers at once, registries, templates and Dockerize, a stack's environment, graph and network,
+structured logs, metrics and traces, databases anywhere, and local AI. (Issues #8, #9, #13, #14, #15, #22, #23, #24,
+#28, #29, #30, #31, #33, #34 — pull requests #38–#45 and #47.)
+
 ### Added
 - **Safe updates** (Settings → Image updates, off by default): before an image update, Berth scans the current and the
   new version with Trivy. If the new one brings critical or high vulnerabilities the current one doesn't have, Berth
@@ -74,6 +81,21 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - Local AI: the idle stop no longer stops Ollama at once when Berth has no record of its last use.
 - README: new and refreshed screenshots (split view, dependency graph, network map, registries, local AI, images,
   stacks, settings, container details) and the 1.4 features.
+- **Loaders on buttons**: while an action runs — start, stop, restart, pause, delete (rows, stacks, the container
+  screen, bulk actions), the engine button, Run, Pull, Build, Apply, Share, Connect, a query, Local AI — the button
+  shows a small ring spinner, keeps its width and can't be pressed twice.
+- **Metrics history** (#28, Settings → History, off by default): a sample a minute of every container's CPU and
+  memory while Berth runs, kept 1 / 7 / 30 days (at most 100 MB). Resource usage gets 6 h, 24 h and 7 d ranges with
+  starts, restarts, crashes, out-of-memory and pulls marked on the charts, "Compare with the day before", and a click
+  on a chart opens the logs of that moment.
+- **Traces** (sidebar → Observe): a small OpenTelemetry receiver (OTLP over HTTP, protobuf or JSON) on 127.0.0.1 and
+  Docker's bridge; recent traces per service and a span waterfall. Opt-in, in memory only.
+- **Files per image layer**: a Files button on each layer that adds data lists what that step added or deleted,
+  biggest first.
+- **Stop a running query** (PostgreSQL, MySQL / MariaDB): a Stop button next to Run cancels it on the server.
+- **Foreign keys** in the schema editor.
+- READMEs in Japanese and Chinese list the 1.4 features.
+- The self-test prints each step and a Python stack trace on a crash (for the occasional Windows CI failure).
 
 ### Changed
 - Flatpak builds on the GNOME 51 runtime (was 48). A Flathub-ready manifest that builds a pinned release tag is in

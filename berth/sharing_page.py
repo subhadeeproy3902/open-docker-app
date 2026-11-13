@@ -6,6 +6,7 @@ from gi.repository import Adw, Gdk, GLib, Gtk
 
 from . import sharing
 from .util import PageHeader, bg, cname, esc, flat_page, host, host_which, icon_button, label, open_uri
+from .util import set_busy  # noqa: E402
 
 
 def _running(store):
@@ -146,8 +147,8 @@ class ExposeDialog(Adw.Dialog):
                  "https": self.https.get_active(), "lan": self.lan.get_active()}
         if self.editing and self.editing.get("lan_port") and route["lan"]:
             route["lan_port"] = self.editing["lan_port"]
-        self.ok.set_sensitive(False)
-        self.page.add_route(route, done=self.close, fail=lambda: self.ok.set_sensitive(True),
+        set_busy(self.ok, True)
+        self.page.add_route(route, done=self.close, fail=lambda: set_busy(self.ok, False),
                             replaces=self.editing["name"] if self.editing else None)
 
 
@@ -210,7 +211,7 @@ class ShareDialog(Adw.Dialog):
         if self.mode.get_selected() == 1 and not token:
             self.win.toast("Paste the tunnel token, or pick the quick link")
             return
-        self.ok.set_sensitive(False)
+        set_busy(self.ok, True)
         self.status.set_text("Starting…")
 
         def progress(t):
@@ -223,12 +224,12 @@ class ShareDialog(Adw.Dialog):
             self.page.shared(url, cname(c), port)
 
         def fail(e):
-            self.ok.set_sensitive(True)
+            set_busy(self.ok, False)
             self.status.set_text(f"Couldn't share: {e}")
         try:
             expires = self._expires()
         except ValueError as e:
-            self.ok.set_sensitive(True)
+            set_busy(self.ok, False)
             self.status.set_text(str(e))
             return
         bg(sharing.start_tunnel, self.store.engine, c["Id"], port, token, self.keep.get_active(), progress,

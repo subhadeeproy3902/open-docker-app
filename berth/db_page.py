@@ -9,6 +9,7 @@ from . import db, db_edit, dbtools
 from .pages import TablePage, save_dialog
 from .util import (Row, PageHeader, bg, cname, confirm, detail_tag, esc, flat_page, icon_button, label, push_detail,
                    state_of, table_card)
+from .util import set_busy  # noqa: E402
 
 
 class _Obj(GObject.Object):
@@ -1017,7 +1018,8 @@ class Explorer(Gtk.Box):
                                   ("Add column…", "add", "Add a column to this table"),
                                   ("Rename column…", "rename", "Rename a column of this table"),
                                   ("Drop column…", "drop", "Remove a column and its data"),
-                                  ("Add index…", "index", "Index one or more columns")):
+                                  ("Add index…", "index", "Index one or more columns"),
+                                  ("Add foreign key…", "fk", "Make a column point to a row of another table")):
                 bt = Gtk.Button(label=lbl, tooltip_text=tip)
                 bt.connect("clicked", lambda *_a, a=act: self._schema(a))
                 sbar.append(bt)
@@ -1051,6 +1053,10 @@ class Explorer(Gtk.Box):
         self.hist = Gtk.MenuButton(icon_name="document-open-recent-symbolic", tooltip_text="Recent queries")
         self.hist.add_css_class("flat")
         row.append(self.hist)
+        self.stop = Gtk.Button(label="Stop", visible=False, tooltip_text="Stop the running query on the server")
+        self.stop.add_css_class("destructive-action")
+        self.stop.connect("clicked", lambda *_: self._cancel())
+        row.append(self.stop)
         self.saved = Gtk.MenuButton(icon_name="starred-symbolic", tooltip_text="Saved queries")
         self.saved.add_css_class("flat")
         self.saved_pop = Gtk.Popover()
@@ -1655,6 +1661,12 @@ class Explorer(Gtk.Box):
             return True
         return False
 
+    def _cancel(self):
+        set_busy(self.stop, True)
+        bg(self.b.cancel, done=lambda n: (set_busy(self.stop, False), self.stop.set_visible(False),
+                                          self.win.toast("Stopped the query" if n else "The query had already finished")),
+           error=lambda e: (set_busy(self.stop, False), self.win.toast(f"Couldn't stop it: {e}")))
+
     # query tabs
     def _qbar(self):
         while (c := self.qbar.get_first_child()) is not None:
@@ -1764,7 +1776,7 @@ class Explorer(Gtk.Box):
         r = self.struct.result if self._struct_for is self.node else None
         if r is not None:
             cols = [row[0] for row in r.rows]
-        if action in ("rename", "drop", "index") and not cols:
+        if action in ("rename", "drop", "index", "fk") and not cols:
             self.views.set_visible_child_name("structure")
             return self.win.toast("Loading the table's columns — try again in a moment")
         SchemaDialog(self, action, cols).present(self.win)
@@ -1784,21 +1796,25 @@ class Explorer(Gtk.Box):
         self._go(text)
 
     def _go(self, text):
-        self.run.set_sensitive(False)
+        set_busy(self.run, True)
         self.out.loading()
         allow = self.allow
 
         tab = self.qtabs[self.qcur]
+        self.stop.set_visible(self.b.can_cancel)
+        self.stop.set_sensitive(True)
 
         def done(r):
-            self.run.set_sensitive(True)
+            self.stop.set_visible(False)
+            set_busy(self.run, False)
             tab["result"] = r
             if tab is self.qtabs[self.qcur]:
                 self.out.show(r)
             self._remember(text)
 
         def fail(e):
-            self.run.set_sensitive(True)
+            self.stop.set_visible(False)
+            set_busy(self.run, False)
             self.out.error(e)
         bg(self.b.query, text, allow, done=done, error=fail)
 
@@ -2061,7 +2077,7 @@ class ConnectDialog(Adw.Dialog):
         url = self.url.get_text().strip()
         if not url:
             return
-        self.go.set_sensitive(False)
+        set_busy(self.go, True)
         self.status.set_text("Starting the client and connecting…")
         eng = self.page.store.engine
 
@@ -2073,7 +2089,7 @@ class ConnectDialog(Adw.Dialog):
             self.page.open_backend(b, b.name, on_close=b.close)
 
         def fail(e):
-            self.go.set_sensitive(True)
+            set_busy(self.go, False)
             self.status.set_text(f"Couldn't connect: {e}")
         bg(db_external.open_external, eng, url, done=done, error=fail)
 
@@ -2127,7 +2143,7 @@ class SqliteDialog(Adw.Dialog):
             self.win.toast("Type the path of the file")
             return
         volume = self.kind.get_selected() == 1
-        self.ok.set_sensitive(False)
+        set_busy(self.ok, True)
         eng = self.store.engine
 
         def work():
@@ -2160,6 +2176,6 @@ class SqliteDialog(Adw.Dialog):
             self.page.open_backend(b, b.name, cleanup)
 
         def fail(e):
-            self.ok.set_sensitive(True)
+            set_busy(self.ok, False)
             self.win.toast(str(e))
         bg(work, done=done, error=fail)

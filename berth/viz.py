@@ -14,6 +14,7 @@ from gi.repository import Adw, Gtk, Pango, PangoCairo
 
 from . import charts, compose
 from .util import bg, cname, fmt_rate, host, labels
+from .util import set_busy  # noqa: E402
 
 NODE_W, NODE_H, GAP_X, GAP_Y, PAD = 170, 54, 90, 26, 40
 
@@ -455,13 +456,13 @@ class NetworkMap(Adw.Dialog):
         src = next((c for c in self._running() if cname(c) == it.get_string()), None)
         if not src:
             return
-        self.go.set_sensitive(False)
+        set_busy(self.go, True)
         self.result.set_text("Checking…")
         self.result.set_css_classes(["caption", "dim-label"])
 
         def done(res):
             ip, ok = res
-            self.go.set_sensitive(True)
+            set_busy(self.go, False)
             name = it.get_string()
             if not ip:
                 msg, good = f"{name} can't resolve “{target}” — not on a shared network, or a typo", False
@@ -476,6 +477,6 @@ class NetworkMap(Adw.Dialog):
             self.result.set_css_classes(["caption", "ok-text" if good else "warn-text"])
 
         def fail(e):
-            self.go.set_sensitive(True)
+            set_busy(self.go, False)
             self.result.set_text(f"Couldn't check: {e}")
         bg(reach, self.store.engine, src["Id"], target, int(port) if port else None, done=done, error=fail)

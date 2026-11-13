@@ -132,7 +132,11 @@ arrives; there are no animations or timers while idle. A *Software rendering* sw
 - **Structured logs**: JSON and `key=value` fields you can click to filter, saved filters, pause, export to text / JSON / CSV, stack traces grouped.
 - **App metrics**: a Metrics tab charts a container's own Prometheus `/metrics` endpoint.
 - **Image layers**: where an image's size goes, layer by layer.
-- **Databases outside Docker** from a connection string, query tabs, saved queries and schema editing (tables, columns, indexes).
+- **Databases outside Docker** from a connection string, query tabs, saved queries, stop a running query, and schema editing (tables, columns, indexes, foreign keys).
+- **Metrics history** (opt-in): 6 h / 24 h / 7 d charts with restarts, crashes and pulls marked, compared with the day before; click a spike to see the logs of that moment.
+- **Traces**: a built-in OpenTelemetry receiver (OTLP/HTTP) with a span waterfall per request — no collector needed.
+- **Image layers**: the files each build step added or deleted, biggest first.
+- **No double clicks**: buttons show a ring loader while their action runs.
 
 - **Containers** grouped by Compose project; start / stop / restart / pause / delete one container or a whole stack; ports open in your browser.
 - **Container details**: Logs · Inspect (environment values hidden until you ask) · Mounts · **Exec** (built-in terminal with VTE) · Files · Stats.
@@ -274,12 +278,12 @@ notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 - [x] Native Windows named-pipe support (no TCP setting needed) — 1.3
 - [x] SSH remote engines (`ssh://user@host`) — 1.3
 - [x] Database and volume backups on a schedule, with restore — 1.3
-- [x] SQL editor: several tabs, saved queries — 1.4 (cancelling a running query: still open)
-- [x] Schema editing (create tables, columns, indexes) — 1.4 (following foreign keys: still open)
-- [x] Image layer explorer (size per layer) — 1.4 (files per layer: still open)
+- [x] SQL editor: several tabs, saved queries, cancel a running query — 1.4
+- [x] Schema editing (create tables, columns, indexes, foreign keys) — 1.4
+- [x] Image layer explorer (size and files per layer) — 1.4
 - [x] Compose graph view (services, networks, volumes, depends_on) — 1.4
 - [x] Resource alerts (CPU / memory / disk thresholds) — 1.4
-- [x] Registry browser, templates, Dockerize, network map, environment manager, app metrics, local AI + MCP — 1.4
+- [x] Registry browser, templates, Dockerize, network map, environment manager, app metrics, traces, metrics history, local AI + MCP — 1.4
 - [ ] More Kubernetes resources (ConfigMaps, Secrets, Ingress, Jobs)
 - [ ] Translations of the app UI (Chinese, Japanese, …)
 

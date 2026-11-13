@@ -17,6 +17,7 @@ Public links (issue #27)
     With a tunnel token (Cloudflare Zero Trust), the hostname is the one configured in the Cloudflare dashboard.
   * Shares stop when Berth quits unless they are marked "keep running"."""
 import io
+import json
 import re
 import tarfile
 import time
@@ -55,7 +56,7 @@ def ensure_image(engine, ref, progress=None):
     if progress:
         progress(f"Downloading {ref}…")
     st = engine.pull(ref)
-    last = b""
+    last, buf, layers, shown = b"", b"", {}, 0.0
     try:
         while True:
             c = st.read(2.0)
@@ -63,6 +64,24 @@ def ensure_image(engine, ref, progress=None):
                 break
             if c:
                 last = (last + c)[-4096:]
+                if progress:                       # "Downloading ollama/ollama — 512 MB of 1.5 GB"
+                    buf += c
+                    *lines, buf = buf.split(b"\n")
+                    for ln in lines:
+                        try:
+                            d = json.loads(ln)
+                        except ValueError:
+                            continue
+                        det = d.get("progressDetail") or {}
+                        if d.get("id") and d.get("status") == "Downloading" and det.get("total"):
+                            layers[d["id"]] = (det.get("current", 0), det["total"])
+                        elif d.get("id") in layers and d.get("status") in ("Download complete", "Pull complete"):
+                            layers[d["id"]] = (layers[d["id"]][1], layers[d["id"]][1])
+                    if layers and time.time() - shown > 1:
+                        from .util import fmt_bytes
+                        shown = time.time()
+                        done, total = sum(a for a, _b in layers.values()), sum(b for _a, b in layers.values())
+                        progress(f"Downloading {ref} — {fmt_bytes(done)} of {fmt_bytes(total)}")
     finally:
         st.close()
     if not has_image(engine, ref):

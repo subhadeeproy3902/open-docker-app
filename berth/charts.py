@@ -38,15 +38,40 @@ class LineChart(Gtk.DrawingArea):
         super().__init__(content_height=height, hexpand=True)
         self.fmt, self.binary, self.fill = fmt, binary, fill
         self.series, self.hidden, self.window = [], set(), 600
+        self.markers, self.on_click = [], None     # [(time, text, colour)] — vertical lines (restarts, pulls…)
+        self.dashed = set()                        # series drawn dashed (a comparison, e.g. the day before)
         self.set_draw_func(self._draw)
         self.set_has_tooltip(True)
         self.connect("query-tooltip", self._tooltip)
+        click = Gtk.GestureClick()
+        click.connect("released", self._clicked)
+        self.add_controller(click)
 
-    def set_data(self, series, window=None):
+    def set_data(self, series, window=None, markers=None):
         self.series = series
         if window:
             self.window = window
+        if markers is not None:
+            self.markers = markers
         self.queue_draw()
+
+    def _t_at(self, x):
+        L, R, T, B, pw, ph = self._geom(self.get_width(), self.get_height())
+        return time.time() - self.window + (x - L) / max(1, pw) * self.window
+
+    def _clicked(self, _g, _n, x, _y):
+        if self.on_click and x >= self._geom(self.get_width(), self.get_height())[0]:
+            self.on_click(self._t_at(x))
+
+    @staticmethod
+    def _ago(secs):
+        if secs <= 0:
+            return "now"
+        if secs < 3600:
+            return f"−{round(secs / 60)}m"
+        if secs < 2 * 86400:
+            return f"−{secs / 3600:.0f}h"
+        return f"−{secs / 86400:.0f}d"
 
     def _geom(self, w, h):
         return 58, 8, 8, 20, w - 66, h - 28        # left, right, top, bottom, plot w, plot h
@@ -81,7 +106,7 @@ class LineChart(Gtk.DrawingArea):
             cr.show_text(txt)
         for k in range(6):
             t = t0 + self.window * k / 5
-            txt = "now" if k == 5 else f"−{round((self.window - self.window * k / 5) / 60)}m"
+            txt = self._ago(self.window - self.window * k / 5)
             ext = cr.text_extents(txt)
             x = min(w - R - ext.width, max(L, X(t) - ext.width / 2))
             cr.move_to(x, h - 5)
@@ -102,10 +127,28 @@ class LineChart(Gtk.DrawingArea):
                 cr.set_source_rgba(r, g, b, .14)
                 cr.fill()
                 cr.append_path(path)
-            cr.set_source_rgba(r, g, b, 1)
+            cr.set_source_rgba(r, g, b, .55 if name in self.dashed else 1)
             cr.set_line_width(1.6)
             cr.set_line_join(1)
+            if name in self.dashed:
+                cr.set_dash([5, 4])
             cr.stroke()
+            cr.set_dash([])
+        for t, _text, colour in self.markers:              # events: a thin line and a dot at the top
+            if t < t0:
+                continue
+            x = round(X(t)) + .5
+            r, g, b, _ = rgb(colour)
+            cr.set_source_rgba(r, g, b, .55)
+            cr.set_line_width(1)
+            cr.set_dash([2, 2])
+            cr.move_to(x, T)
+            cr.line_to(x, T + ph)
+            cr.stroke()
+            cr.set_dash([])
+            cr.set_source_rgba(r, g, b, .95)
+            cr.arc(x, T + 3, 3, 0, 6.2832)
+            cr.fill()
         if not any(len(s[2]) > 1 for s in vis):
             cr.set_source_rgba(fg.red, fg.green, fg.blue, .45)
             cr.select_font_face("sans")
@@ -121,22 +164,28 @@ class LineChart(Gtk.DrawingArea):
         if x < L or not self.series:
             return False
         t = time.time() - self.window + (x - L) / pw * self.window
+        near = max(10, self.window / 300)                  # one minute per point in long ranges
         rows = []
         stamp = None
         for name, color, pts in self.series:
             if name in self.hidden or not pts:
                 continue
             p = min(pts, key=lambda q: abs(q[0] - t))
-            if abs(p[0] - t) > 10:
+            if abs(p[0] - t) > near:
                 continue
             stamp = p[0]
             rows.append((p[1], name, color))
-        if not rows:
+        evs = [m for m in self.markers if abs(m[0] - t) <= max(near, self.window / pw * 4)]
+        if not rows and not evs:
             return False
         rows.sort(reverse=True)
-        head = time.strftime("%H:%M:%S", time.localtime(stamp))
-        tip.set_markup(f"<b>{head}</b>\n" + "\n".join(
-            f"<span foreground='{c}'>●</span> {esc(n)}  <tt>{esc(self.fmt(v))}</tt>" for v, n, c in rows[:10]))
+        fmt = "%H:%M:%S" if self.window <= 3600 else "%a %H:%M"
+        head = time.strftime(fmt, time.localtime(stamp or t))
+        lines = [f"<span foreground='{c}'>●</span> {esc(n)}  <tt>{esc(self.fmt(v))}</tt>" for v, n, c in rows[:10]]
+        lines += [f"<span foreground='{c}'>▲</span> {esc(txt)}" for _t, txt, c in evs[:6]]
+        if self.on_click:
+            lines.append("<small>Click to see the logs from this moment</small>")
+        tip.set_markup(f"<b>{head}</b>\n" + "\n".join(lines))
         return True
 
 

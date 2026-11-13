@@ -405,6 +405,19 @@ class Engine:
     def events(self, filters):
         return self.stream("/events", {"filters": filters})
 
+    def events_between(self, since, until, filters):
+        """Events in a past time window (the call ends at `until`): [dict]."""
+        raw = self.req("GET", "/events", {"since": int(since), "until": int(until), "filters": filters}, timeout=20)
+        if isinstance(raw, dict):
+            return [raw]
+        out = []
+        for line in (raw or "").splitlines():
+            try:
+                out.append(json.loads(line))
+            except ValueError:
+                continue
+        return out
+
     # ── containers ──
     def containers(self):
         return self.req("GET", "/containers/json", {"all": True}, timeout=20)

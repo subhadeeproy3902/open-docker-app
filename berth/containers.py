@@ -18,6 +18,7 @@ from .util import (release_on_leave, Row, bg, cname, confirm, connect_row, disco
                    fmt_rate, icon_button, label, labels, open_uri, short_status, status_tooltip, exit_code, spawn, state_of,
                    terminal_argv, themed, thread, detail_tag, push_detail, toolbar_row,
                    run_in_terminal, PageHeader, flat_page, table_card, WidePrefs)
+from .util import set_busy  # noqa: E402
 
 try:
     gi.require_version("Vte", "3.91")
@@ -51,17 +52,21 @@ class Actions:
     def __init__(self, win, store):
         self.win, self.store = win, store
 
-    def verb(self, cid, verb, row=None):
+    def verb(self, cid, verb, row=None, button=None):
+        """Start / stop / restart / pause / unpause. While it runs, the row (or the button) shows a ring spinner and
+        can't be pressed again."""
         c = self.store.by_id(cid)
         name = cname(c) if c else cid[:12]
         if row is not None:
             row.extra["busy"] = True
             row.emit("changed")
+        set_busy(button, True)
 
         def finish(_r=None):
             if row is not None:
                 row.extra.pop("busy", None)
                 row.emit("changed")
+            set_busy(button, False)
             self.store.refresh("containers")
 
         def fail(e):
@@ -69,20 +74,28 @@ class Actions:
             finish()
         bg(self.store.engine.action, cid, verb, done=finish, error=fail)
 
-    def delete(self, cid, after=None):
+    def delete(self, cid, after=None, row=None, button=None):
         c = self.store.by_id(cid)
         name = cname(c) if c else cid[:12]
         extra = " Docker Compose creates it again the next time the stack starts." if c and project(c) else ""
 
+        def busy(on):
+            if row is not None:
+                (row.extra.__setitem__("busy", True) if on else row.extra.pop("busy", None))
+                row.emit("changed")
+            set_busy(button, on)
+
         def go():
+            busy(True)
             bg(self.store.engine.remove_container, cid,
-               done=lambda _r: (self.win.toast(f"Deleted {name}"), self.store.refresh("containers"), after and after()),
-               error=lambda e: self.win.toast(f"{name}: {e}"))
+               done=lambda _r: (busy(False), self.win.toast(f"Deleted {name}"), self.store.refresh("containers"),
+                                after and after()),
+               error=lambda e: (busy(False), self.win.toast(f"{name}: {e}")))
         confirm(self.win, f"Delete {esc(name)}?",
                 f"The container is stopped and removed. Its volumes (databases, uploads) are <b>kept</b>.{extra}",
                 "Delete", go)
 
-    def project_verb(self, proj, verb):
+    def project_verb(self, proj, verb, row=None):
         cs = [c for c in self.store.containers if project(c) == proj]
         if verb == "start":
             targets = [c for c in cs if c["State"] != "running"]
@@ -103,12 +116,19 @@ class Actions:
                     errs.append(f"{cname(c)}: {e}")
             return errs
 
+        def busy(on):
+            if row is not None:
+                (row.extra.__setitem__("busy", True) if on else row.extra.pop("busy", None))
+                row.emit("changed")
+
         def done(errs):
+            busy(False)
             self.store.refresh("containers")
             self.win.toast(errs[0] if errs else f"{proj}: done")
 
         def go():
-            bg(run, done=done)
+            busy(True)
+            bg(run, done=done, error=lambda e: (busy(False), self.win.toast(str(e))))
         if verb == "start":
             go()
         else:
@@ -307,9 +327,13 @@ class ActionsCell(Gtk.Box):
 
     def update(self, row):
         self.row = row
-        busy = row.extra.get("busy")
-        for w in (self.main, self.menu, self.trash):
+        self._update(row)
+        busy = bool(row.extra.get("busy"))
+        set_busy(self.main, busy, "Working…")
+        for w in (self.menu, self.trash):
             w.set_sensitive(not busy)
+
+    def _update(self, row):
         m = Gio.Menu()
         if row.kind == "project":
             cs = row.data["containers"]
@@ -375,7 +399,7 @@ class ActionsCell(Gtk.Box):
         a = self.page.actions
         if r.kind == "project":
             run = any(c["State"] == "running" for c in r.data["containers"])
-            a.project_verb(r.key, "stop" if run else "start")
+            a.project_verb(r.key, "stop" if run else "start", r)
         else:
             st = r.data["State"]
             a.verb(r.key, "stop" if st in ("running", "restarting", "paused") else "start", r)
@@ -385,9 +409,9 @@ class ActionsCell(Gtk.Box):
         if not r:
             return
         if r.kind == "project":
-            self.page.actions.project_verb(r.key, "remove")
+            self.page.actions.project_verb(r.key, "remove", r)
         else:
-            self.page.actions.delete(r.key)
+            self.page.actions.delete(r.key, row=r)
 
 
 class ContainersPage(Gtk.Box):
@@ -453,7 +477,7 @@ class ContainersPage(Gtk.Box):
             b = Gtk.Button(label=lbl, tooltip_text=tip)
             if verb == "remove":
                 b.add_css_class("destructive-action")
-            b.connect("clicked", lambda *_a, v=verb: self._bulk(v))
+            b.connect("clicked", lambda b_, v=verb: self._bulk(v, b_))
             bar.pack_end(b)
             self.bulk_btns.append(b)
         self.sel_bar = Gtk.Revealer(child=bar, transition_type=Gtk.RevealerTransitionType.SLIDE_UP, reveal_child=False)
@@ -745,7 +769,7 @@ class ContainersPage(Gtk.Box):
         for r in list(self.items.values()) + list(self.groups.values()):
             r.emit("changed")
 
-    def _bulk(self, verb):
+    def _bulk(self, verb, button=None):
         ids = list(self.picked)
         names = [cname(self.store.by_id(i)) for i in ids if self.store.by_id(i)]
         if not ids:
@@ -765,6 +789,7 @@ class ContainersPage(Gtk.Box):
             return fails
 
         def done(fails):
+            set_busy(button, False)
             word = {"start": "Started", "stop": "Stopped", "restart": "Restarted", "remove": "Removed"}[verb]
             ok = len(ids) - len(fails)
             self.win.toast(f"{word} {ok} of {len(ids)}" + (f" — {fails[0][:120]}" if fails else ""))
@@ -776,7 +801,8 @@ class ContainersPage(Gtk.Box):
         def go():
             self.win.toast(f"{verb.capitalize()}ing {len(ids)} container{'s' if len(ids) > 1 else ''}…"
                            if verb != "stop" else f"Stopping {len(ids)}…")
-            bg(work, done=done, error=lambda ex: self.win.toast(str(ex)))
+            set_busy(button, True)
+            bg(work, done=done, error=lambda ex: (set_busy(button, False), self.win.toast(str(ex))))
         if verb in ("remove", "stop"):
             listing = ", ".join(names[:8]) + (f" and {len(names) - 8} more" if len(names) > 8 else "")
             confirm(self.win, f"{'Remove' if verb == 'remove' else 'Stop'} {len(ids)} container"
@@ -815,18 +841,18 @@ class ContainersPage(Gtk.Box):
 
     def _run_sample(self):
         from .onboarding import SAMPLE_NAME, SAMPLE_PORT, run_sample
-        self.empty_run.set_sensitive(False)
+        set_busy(self.empty_run, True)
         self.win.toast("Downloading and starting the sample…")
 
         def done(cid):
-            self.empty_run.set_sensitive(True)
+            set_busy(self.empty_run, False)
             self.store.refresh("containers")
             t = Adw.Toast(title=f"{SAMPLE_NAME} is running on localhost:{SAMPLE_PORT}", button_label="Open", timeout=8)
             t.connect("button-clicked", lambda *_: __import__("webbrowser").open(f"http://localhost:{SAMPLE_PORT}"))
             self.win.toasts.add_toast(t)
 
         def fail(e):
-            self.empty_run.set_sensitive(True)
+            set_busy(self.empty_run, False)
             self.win.toast(f"Couldn't run the sample: {e}")
         run_sample(self.store, lambda t: False, done, fail)
 
@@ -902,10 +928,12 @@ class ContainerDetail(Adw.NavigationPage):
         self.tabs = Adw.ViewStack()
         self.wtitle = PageHeader(cname(c))
         self.btn_main = icon_button("media-playback-stop-symbolic", "Stop", self._main)
-        self.btn_restart = icon_button("view-refresh-symbolic", "Restart", lambda: self.actions.verb(cid, "restart"))
+        self.btn_restart = icon_button("view-refresh-symbolic", "Restart",
+                                       lambda: self.actions.verb(cid, "restart", button=self.btn_restart))
         self.btn_pause = icon_button("media-playback-pause-symbolic", "Pause", self._pause)
         self.btn_port = icon_button("web-browser-symbolic", "Open in browser", self._port)
-        self.btn_delete = icon_button("user-trash-symbolic", "Delete", lambda: self.actions.delete(cid, after=self._gone))
+        self.btn_delete = icon_button("user-trash-symbolic", "Delete",
+                                      lambda: self.actions.delete(cid, after=self._gone, button=self.btn_delete))
         self.btn_edit = Gtk.Button(label="Edit", valign=Gtk.Align.CENTER,
                                    tooltip_text="Change name, environment, ports, volumes, limits…")
         self.btn_edit.connect("clicked", lambda *_: EditDialog(page.win, self.store, self.cid).present(page.win))
@@ -1039,12 +1067,13 @@ class ContainerDetail(Adw.NavigationPage):
     def _main(self):
         c = self.c
         if c:
-            self.actions.verb(self.cid, "start" if c["State"] not in ("running", "paused", "restarting") else "stop")
+            self.actions.verb(self.cid, "start" if c["State"] not in ("running", "paused", "restarting") else "stop",
+                              button=self.btn_main)
 
     def _pause(self):
         c = self.c
         if c:
-            self.actions.verb(self.cid, "unpause" if c["State"] == "paused" else "pause")
+            self.actions.verb(self.cid, "unpause" if c["State"] == "paused" else "pause", button=self.btn_pause)
 
     def _port(self):
         c = self.c
@@ -1254,20 +1283,20 @@ class ContainerDetail(Adw.NavigationPage):
             cmd = entry.get_text().strip()
             if not cmd:
                 return
-            run.set_sensitive(False)
+            set_busy(run, True)
             buf.insert(buf.get_end_iter(), f"$ {cmd}\n")
 
             def done(r):
                 code, so, se = r
                 buf.insert(buf.get_end_iter(), so + se + (f"[exit {code}]\n\n" if code else "\n"))
-                run.set_sensitive(True)
+                set_busy(run, False)
                 adj = out.get_parent().get_vadjustment() if out.get_parent() else None
                 if adj:
                     GLib.idle_add(lambda: adj.set_value(adj.get_upper()) or False)
 
             def fail(e):
                 buf.insert(buf.get_end_iter(), f"error: {e}\n\n")
-                run.set_sensitive(True)
+                set_busy(run, False)
             bg(self.store.engine.exec_run, self.cid, ["sh", "-c", cmd], done=done, error=fail)
         entry.connect("activate", go)
         run.connect("clicked", go)

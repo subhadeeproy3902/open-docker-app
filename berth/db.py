@@ -283,6 +283,11 @@ class Backend:
         """The database that actually holds data (used when the default one is empty), or None."""
         return None
 
+    can_cancel = False          # a running console query can be stopped (SQL engines)
+
+    def cancel(self):
+        raise DbError("Stopping a running query isn't supported for this database")
+
     def can_rename(self, node):
         return False
 
@@ -384,8 +389,10 @@ class Postgres(Backend):
         self.password = None                   # read in connect(): it may live in a *_FILE secret
         self.db = e.get("POSTGRES_DB") or e.get("POSTGRESQL_DATABASE") or self.user
 
-    def _psql(self, sql, readonly=True, db=None, file=None):
-        env = {"PGPASSWORD": self.password or "", "PGCONNECT_TIMEOUT": "10",
+    can_cancel = True
+
+    def _psql(self, sql, readonly=True, db=None, file=None, app="berth"):
+        env = {"PGPASSWORD": self.password or "", "PGCONNECT_TIMEOUT": "10", "PGAPPNAME": app,
                **({"PGHOST": self.remote["host"], "PGPORT": str(self.remote["port"]),
                    "PGSSLMODE": self.remote.get("sslmode") or "prefer"} if self.remote else {}),
                "PGOPTIONS": "-c statement_timeout=60000 -c standard_conforming_strings=on"
@@ -400,8 +407,8 @@ class Postgres(Backend):
             raise DbError(msg.replace("psql: error: ", ""))
         return out, trunc
 
-    def _rows(self, sql, readonly=True, db=None):
-        out, trunc = self._psql(sql, readonly, db)
+    def _rows(self, sql, readonly=True, db=None, app="berth"):
+        out, trunc = self._psql(sql, readonly, db, app=app)
         rows, cut = _csv_rows(out)
         if (trunc or cut) and len(rows) > 1:      # the last record may be incomplete
             rows = rows[:-1]
@@ -502,7 +509,15 @@ class Postgres(Backend):
     def query(self, text, allow_write=False):
         if not text.strip():
             raise DbError("Type a query first")
-        return self._rows(text, readonly=not allow_write)
+        return self._rows(text, readonly=not allow_write, app=self._console_app())
+
+    def _console_app(self):
+        return f"berth-console-{id(self) & 0xffffff:x}"
+
+    def cancel(self):
+        r = self._rows(f"select count(pg_cancel_backend(pid)) from pg_stat_activity where application_name = "
+                       f"{_ql(self._console_app())} and pid <> pg_backend_pid()", readonly=True)
+        return int(r.rows[0][0]) if r.rows else 0
 
     def example(self):
         return "select * from pg_stat_activity limit 20;"
@@ -592,7 +607,7 @@ class MySQL(Backend):
             self.client = self.which("mariadb", "mysql")
             if not self.client:
                 raise DbError("This image has no mysql / mariadb client")
-        cmd = [self.client, "--batch", "--column-names", "--connect-timeout=10", "-u", self.user]
+        cmd = [self.client, "--batch", "--column-names", "--comments", "--connect-timeout=10", "-u", self.user]
         if self.remote:
             cmd += ["-h", self.remote["host"], "-P", str(self.remote["port"])]
             if self.client == "mariadb":            # self-signed certificates are common on local and cloud servers
@@ -694,8 +709,23 @@ class MySQL(Backend):
             if bad:
                 raise DbError(f"“{bad[0][:60]}” changes data. Berth is in read-only mode: switch on “Allow changes” "
                               "to run it.")
+        # every statement carries the marker: the processlist shows only the statement running now
+        text = ";\n".join(f"/*{self._marker()}*/ {st}" for st in stmts) + ";"
+        if not allow_write:
             text = "SET SESSION TRANSACTION READ ONLY; " + text
         return self._run(text)
+
+    can_cancel = True
+
+    def _marker(self):
+        return f"berth-console-{id(self) & 0xffffff:x}"
+
+    def cancel(self):
+        r = self._run("select id from information_schema.processlist where info like "
+                      f"'%{self._marker()}%' and id <> connection_id()", db="")
+        for row in r.rows:
+            self._run(f"kill query {int(row[0])}", db="")
+        return len(r.rows)
 
     def example(self):
         return "show processlist;"

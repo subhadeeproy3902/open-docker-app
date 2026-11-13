@@ -4,6 +4,7 @@ from gi.repository import Adw, Gtk
 
 from .db import _bq, _qi
 from .util import bg, follow_content
+from .util import set_busy  # noqa: E402
 
 TYPES = {"postgres": ["text", "integer", "bigint", "boolean", "numeric(12,2)", "timestamptz", "date", "jsonb", "uuid",
                       "bytea", "real", "varchar(255)"],
@@ -66,6 +67,23 @@ def drop_column(backend, table, name):
     return f"alter table {table} drop column {q(backend, name)}"
 
 
+ON_DELETE = ["no action", "cascade", "set null", "restrict"]
+
+
+def ref_table(backend, text, schema="public"):
+    """A table typed as `table` or `schema.table` → quoted SQL."""
+    parts = [p.strip().strip('"`') for p in text.split(".") if p.strip()]
+    if backend.kind == "postgres":
+        sch, tab = (parts[0], parts[1]) if len(parts) > 1 else (schema, parts[0])
+        return f"{_qi(sch)}.{_qi(tab)}"
+    return _bq(parts[-1])
+
+
+def add_foreign_key(backend, table, name, col, ref, ref_col, on_delete):
+    return (f"alter table {table} add constraint {q(backend, name)} foreign key ({q(backend, col)}) "
+            f"references {ref} ({q(backend, ref_col)}) on delete {on_delete}")
+
+
 def add_index(backend, table, name, cols, unique):
     cl = ", ".join(q(backend, c) for c in cols)
     return f"create {'unique ' if unique else ''}index {q(backend, name)} on {table} ({cl})"
@@ -74,7 +92,7 @@ def add_index(backend, table, name, cols, unique):
 class SchemaDialog(Adw.Dialog):
     """action: table · add · rename · drop · index. columns: the current table's column names."""
     TITLES = {"table": "New table", "add": "Add a column", "rename": "Rename a column", "drop": "Drop a column",
-              "index": "Add an index"}
+              "index": "Add an index", "fk": "Add a foreign key"}
 
     def __init__(self, explorer, action, columns=()):
         super().__init__(title=self.TITLES[action], content_width=560)
@@ -180,6 +198,14 @@ class SchemaDialog(Adw.Dialog):
             s = self._switch(c)
             self.idx_cols.append((c, s))
 
+    def _build_fk(self):
+        self.col = self._pick("Column", self.columns, "The column that points to another table")
+        self.ref = self._entry("Points to the table (table, or schema.table)")
+        self.ref_col = self._entry("…and its column", "id")
+        self.on_delete = self._pick("When that row is deleted", ON_DELETE,
+                                    "cascade deletes these rows too; set null empties the column")
+        self.name = self._entry("Constraint name", f"{self._table_name()}_fk")
+
     def _table_name(self):
         n = self.ex.node
         return (n.ref[1] if isinstance(n.ref, tuple) else n.ref) if n is not None else "table"
@@ -208,6 +234,13 @@ class SchemaDialog(Adw.Dialog):
         if a == "drop":
             return (drop_column(b, table, self.columns[self.col.get_selected()]), None) if self.columns else \
                 (None, "No columns")
+        if a == "fk":
+            ref, rc, name = self.ref.get_text().strip(), self.ref_col.get_text().strip(), self.name.get_text().strip()
+            if not (self.columns and ref and rc and name):
+                return None, "Pick the column, the table and column it points to, and a name"
+            return add_foreign_key(b, table, name, self.columns[self.col.get_selected()],
+                                   ref_table(b, ref, schema_of(b, self.ex.node)), rc,
+                                   ON_DELETE[self.on_delete.get_selected()]), None
         if a == "index":
             cols = [c for c, s in self.idx_cols if s.get_active()]
             name = self.name.get_text().strip()
@@ -228,7 +261,7 @@ class SchemaDialog(Adw.Dialog):
         sql, _why = self._statement()
         if not sql:
             return
-        self.go.set_sensitive(False)
+        set_busy(self.go, True)
 
         def done(_r):
             self.close()
@@ -238,6 +271,6 @@ class SchemaDialog(Adw.Dialog):
                 self.ex._load_struct()
 
         def fail(e):
-            self.go.set_sensitive(True)
+            set_busy(self.go, False)
             self.sql.set_text(f"{sql}\n\nFailed: {e}")
         bg(self.b.query, sql, True, done=done, error=fail)

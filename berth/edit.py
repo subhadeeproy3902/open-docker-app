@@ -10,6 +10,7 @@ import time
 from gi.repository import Adw, GLib, Gtk
 
 from .util import bg, cname, esc, labels
+from .util import set_busy  # noqa: E402
 
 
 def _kv_rows(group, items, placeholder_k, placeholder_v, sep):
@@ -205,11 +206,11 @@ class EditDialog(Adw.Dialog):
             self._run(v, changed, False)
 
     def _run(self, v, changed, recreate):
-        self.apply_btn.set_sensitive(False)
+        set_busy(self.apply_btn, True)
         self.win.toast("Recreating the container…" if recreate else "Applying…")
         bg(_apply_changes, self.store.engine, self.d, v, changed, recreate,
            done=lambda new_id: self._done(new_id, recreate),
-           error=lambda e: (self.apply_btn.set_sensitive(True), self.win.toast(f"Not changed: {e}")))
+           error=lambda e: (set_busy(self.apply_btn, False), self.win.toast(f"Not changed: {e}")))
 
     def _done(self, new_id, recreate):
         self.win.toast("Container recreated with your changes" if recreate else "Changes applied")

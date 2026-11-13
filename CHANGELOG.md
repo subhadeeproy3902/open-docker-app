@@ -10,7 +10,7 @@ and the project uses [Semantic Versioning](https://semver.org/).
 Berth grows from a Docker desktop into a place to build, watch and fix what you run: safer updates, alerts and
 history, several containers at once, registries, templates and Dockerize, a stack's environment, graph and network,
 structured logs, metrics and traces, databases anywhere, and local AI. (Issues #8, #9, #13, #14, #15, #22, #23, #24,
-#28, #29, #30, #31, #33, #34 — pull requests #38–#46.)
+#28, #29, #30, #31, #33, #34 — pull requests #38–#45 and #47.)
 
 ### Added
 - **Safe updates** (Settings → Image updates, off by default): before an image update, Berth scans the current and the

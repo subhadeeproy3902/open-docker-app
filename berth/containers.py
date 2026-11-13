@@ -964,6 +964,7 @@ class ContainerDetail(Adw.NavigationPage):
                                   ("exec", "Exec", "utilities-terminal-symbolic"),
                                   ("files", "Files", "folder-open-symbolic"),
                                   ("stats", "Stats", "utilities-system-monitor-symbolic"),
+                                  ("metrics", "Metrics", "x-office-spreadsheet-symbolic"),
                                   *((("database", "Database", "drive-multidisk-symbolic"),) if _db_kind(c) else ())):
             if icon == "utilities-system-monitor-symbolic":
                 icon = themed(icon, "power-profile-performance-symbolic")
@@ -1057,7 +1058,8 @@ class ContainerDetail(Adw.NavigationPage):
         if name not in self.built and name != "logs":
             self.built.add(name)
             builder = {"inspect": self._build_inspect, "mounts": self._build_mounts, "exec": self._build_exec,
-                       "files": self._build_files, "stats": self._build_stats, "database": self._build_database}[name]
+                       "files": self._build_files, "stats": self._build_stats, "database": self._build_database,
+                       "metrics": self._build_metrics}[name]
             child = self.tabs.get_child_by_name(name)
             new = builder()
             new.set_vexpand(True)
@@ -1272,6 +1274,15 @@ class ContainerDetail(Adw.NavigationPage):
         box.append(bar)
         box.append(Gtk.ScrolledWindow(child=out, vexpand=True))
         return box
+
+    # app metrics (#30)
+    def _build_metrics(self):
+        c = self.c or {}
+        if c.get("State") != "running":
+            return Adw.StatusPage(icon_name="x-office-spreadsheet-symbolic", title="Container is not running",
+                                  description="Its metrics endpoint can be read while it runs.")
+        from .metrics import MetricsView
+        return MetricsView(self.page.win, self.store, self.cid)
 
     # files
     def _build_files(self):

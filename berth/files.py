@@ -52,10 +52,12 @@ class FileBrowser(Gtk.Box):
         super().__init__(orientation=Gtk.Orientation.VERTICAL)
         self.win, self.store, self.cid, self.root = win, store, cid, root
         self.cwd, self.current, self.dirty = root, None, False
-        if note:
-            b = Adw.Banner(title=note, revealed=True)
-            self.append(b)
-        bar = Gtk.Box(spacing=6, margin_start=12, margin_end=12, margin_top=8, margin_bottom=6)
+        if note:                                   # an inline note inside the card, not an edge-to-edge banner
+            n = Gtk.Box(spacing=8, css_classes=["card-note"])
+            n.append(Gtk.Image(icon_name="dialog-information-symbolic"))
+            n.append(Gtk.Label(label=note, xalign=0, wrap=True, hexpand=True, css_classes=["caption"]))
+            self.append(n)
+        bar = Gtk.Box(spacing=6, css_classes=["card-bar"])
         self.up = icon_button("go-up-symbolic", "Parent folder", lambda: self.load(_parent(self.cwd)), css=())
         self.path = Gtk.Entry(text=root, hexpand=True)
         self.path.add_css_class("monospace")

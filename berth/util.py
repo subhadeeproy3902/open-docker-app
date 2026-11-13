@@ -150,18 +150,51 @@ def ago(ts):
 
 
 def short_status(s):
+    """Docker's status in a few characters for a table cell: "Up 2 d", "Exited 137 · 3 h", "Unhealthy · 4 min".
+    The full text goes in the tooltip (status_tooltip)."""
     import re
-    s = re.sub(r"^Up ", "Up ", s)
-    s = re.sub(r"About an? ", "1 ", s)
+    s = re.sub(r"About an? ", "1 ", s.strip())
     s = s.replace("Less than a second", "0 s")
     for a, b in ((" seconds", " s"), (" second", " s"), (" minutes", " min"), (" minute", " min"),
                  (" hours", " h"), (" hour", " h"), (" days", " d"), (" day", " d"),
-                 (" weeks", " wk"), (" week", " wk"), (" months", " mo"), (" month", " mo")):
+                 (" weeks", " wk"), (" week", " wk"), (" months", " mo"), (" month", " mo"), (" years", " y"),
+                 (" year", " y")):
         s = s.replace(a, b)
-    s = s.replace(" (healthy)", " · healthy").replace(" (unhealthy)", " · unhealthy")
-    s = s.replace(" (health: starting)", " · starting").replace(" (Paused)", " · paused")
-    m = re.match(r"^Exited \((\d+)\) (.*) ago$", s)
-    return f"Exited ({m.group(1)}) · {m.group(2)} ago" if m else s
+    m = re.match(r"^Exited \((-?\d+)\) (.*?)(?: ago)?$", s)
+    if m:
+        return f"Exited {m.group(1)} · {m.group(2)}"
+    if s.startswith("Restarting"):
+        return "Restarting"
+    m = re.match(r"^Up (.*?)(?: \((healthy|unhealthy|health: starting|Paused)\))?$", s)
+    if m:
+        up, h = m.group(1), m.group(2)
+        return {"unhealthy": f"Unhealthy · {up}", "health: starting": f"Starting · {up}",
+                "Paused": f"Paused · {up}", "healthy": f"Up {up} · healthy"}.get(h, f"Up {up}")
+    return s
+
+
+EXIT_CODES = {0: "finished normally", 1: "the application stopped with an error",
+              2: "wrong arguments or a shell error", 125: "Docker couldn't start it",
+              126: "the command can't be run (permissions?)", 127: "the command was not found",
+              130: "stopped with Ctrl+C (SIGINT)", 134: "aborted (SIGABRT)",
+              137: "killed (SIGKILL) — out of memory, or it didn't stop in time",
+              139: "crashed: segmentation fault (SIGSEGV)", 143: "stopped normally (SIGTERM, e.g. docker stop)",
+              255: "exit status out of range"}
+
+
+def exit_code(status):
+    import re
+    m = re.match(r"^Exited \((-?\d+)\)", status or "")
+    return int(m.group(1)) if m else None
+
+
+def status_tooltip(status):
+    """The full Docker status, plus what an exit code means."""
+    code = exit_code(status)
+    if code is None:
+        return status or None
+    meaning = EXIT_CODES.get(code) or (f"killed by signal {code - 128}" if 128 < code < 160 else "set by the application")
+    return f"{status}\nExit code {code}: {meaning}"
 
 
 def state_of(c):

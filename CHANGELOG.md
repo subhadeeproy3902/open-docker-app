@@ -17,6 +17,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
   passes a share of its memory limit, or when Docker's disk runs low. Checked once a minute, only while an alert is on.
 - The daily "newer image version" check now also runs while the Images page is closed, with a notification.
 - App stores: brand colours in the metainfo; the menu entry lists one main category (Development).
+- **Split view and separate windows** (#22): ⋮ → *Split view with* shows two containers side by side, each with all its
+  tabs; ⋮ → *Open in a new window* gives a container its own window. Each one streams only while it is on screen.
+- **Container details on the design system** (#8): a page header with image · status · stack and the actions on the
+  right, the tab bar as the toolbar row, Exec and Files in cards inside the page margins, the Files warning as an
+  inline note, bars that follow the density setting.
+- **Short status text** (#9): `Up 2 d`, `Exited 137 · 3 h`, `Unhealthy · 4 min`; the full status and what the exit
+  code means (137 = killed / out of memory, 143 = stopped, 139 = crashed …) in the tooltip; failed exits in amber.
 
 ### Changed
 - Flatpak builds on the GNOME 51 runtime (was 48). A Flathub-ready manifest that builds a pinned release tag is in

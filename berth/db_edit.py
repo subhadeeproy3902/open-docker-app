@@ -639,7 +639,8 @@ class DocEdit(Editor):
         out = []
         for k, v in (doc or {}).items():
             if isinstance(v, str):
-                out.append(Field(k, "text", v, multiline=True, readonly=readonly))
+                out.append(Field(k, "text", v, multiline=True, nullable=k != "_id",
+                                 readonly=readonly or ("The document's id can't be changed" if k == "_id" else "")))
             else:
                 kind = ("number" if isinstance(v, (int, float)) and not isinstance(v, bool) else
                         "true / false" if isinstance(v, bool) else "null" if v is None else "JSON")
@@ -879,7 +880,7 @@ class VespaEdit(DocEdit):
 
     def blank(self, node):
         return [Field("document", f"JSON — include \"id\": the new document's id in {node.ref}",
-                      "{\n  \"id\": \"\",\n  \n}", json=True, nullable=False, multiline=True)]
+                      "{\n  \"id\": \"\"\n}", json=True, nullable=False, multiline=True)]
 
     def save(self, node, ident, values, allow):
         self._ok(allow)

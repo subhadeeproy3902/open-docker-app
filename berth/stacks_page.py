@@ -5,7 +5,7 @@ import os
 from gi.repository import Adw, Gio, Gtk
 
 from . import compose, compose_check
-from .util import PageHeader, WidePrefs, bg, cname, esc, flat_page, icon_button, labels, open_uri, short_status
+from .util import follow_content, PageHeader, WidePrefs, bg, cname, esc, flat_page, icon_button, labels, open_uri, short_status
 
 
 def stacks(containers, remembered):
@@ -154,15 +154,17 @@ class StacksPage(Gtk.Box):
         d = Adw.Dialog(title=f"Check · {p}", content_width=560)
         tv = Adw.ToolbarView()
         tv.add_top_bar(Adw.HeaderBar())
-        pp = Adw.PreferencesPage()
-        g = Adw.PreferencesGroup(title=esc(", ".join(files)), description="Checking…")
-        pp.add(g)
-        tv.set_content(pp)
+        g = Adw.PreferencesGroup(title=esc(", ".join(files)), description="Checking…", margin_start=18,
+                                 margin_end=18, margin_top=6, margin_bottom=18)
+        # sized to its results (a PreferencesPage would keep the dialog at its first, tiny height)
+        tv.set_content(Gtk.ScrolledWindow(child=g, propagate_natural_height=True, max_content_height=560,
+                                          hscrollbar_policy=Gtk.PolicyType.NEVER))
         d.set_child(tv)
+        follow_content(d, 560)
         d.present(self.win)
         rows = []
         st = self.store
-        bg(compose_check.check, files, st.containers, st.volumes, st.networks, st.images, p, wd,
+        bg(lambda: compose_check.check(files, *compose.check_inputs(st), p, wd),
            done=lambda res: compose.show_checks(g, rows, res), error=lambda e: g.set_description(esc(str(e))))
 
     def _edit(self, p):

@@ -345,7 +345,8 @@ def stop_volume_helper(engine, cid):
 
 def cleanup_helpers(engine):
     # only volume helpers: a scan container (label value "scan") may belong to a scan still running elsewhere
-    for c in engine.containers_filtered({"label": [f"{HELPER_LABEL}=volume"]}) or []:
+    for c in (engine.containers_filtered({"label": [f"{HELPER_LABEL}=volume"]}) or []) + \
+            (engine.containers_filtered({"label": [f"{HELPER_LABEL}=http"]}) or []):   # + database HTTP helpers
         try:
             engine.remove_container(c["Id"])
         except Exception:  # noqa: BLE001

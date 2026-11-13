@@ -69,6 +69,18 @@ and the project uses [Semantic Versioning](https://semver.org/).
   status, exposure and Open / Start. The Berth logo is in the sidebar and on the engine-off screen.
 
 ### Fixed
+- Found by clicking through every engine and page (`tools/walkthrough.py`, `tools/demo/engines.py`):
+  long values in the row panel were cut off after the first line; selecting a second row cleared the selection
+  (so Copy / Delete never appeared); Vespa documents with their own `id` field couldn't be opened, and documents
+  opened as one JSON blob (now field by field, saving only edited fields); Vespa's new-document template wasn't
+  valid JSON; MongoDB opened the non-existent default database ("test") with no way to pick the real one;
+  Typesense / search engines without curl in their image couldn't be reached when their port isn't reachable
+  (always the case on Docker Desktop for macOS / Windows) — a tiny curl helper in the container's network now
+  bridges it; dialogs whose content grows after opening (Compose check, Stacks check, Pull results, backups)
+  stayed at their first size and hid it; the Compose check said every image "will be downloaded" when the image
+  list wasn't loaded yet; Settings offered Stop / Remove for a proxy that doesn't exist; Pull lists official
+  images first. `_id` is read-only in MongoDB documents.
+- The click-through suites refuse to run against anything but the demo engine (unless told otherwise).
 - The volume page header no longer overflows a 1024 px window (Import, Clone and Rename moved into ⋮). CI fails
   on any layout wider than the window.
 - **macOS**: keyboard shortcuts use ⌘ (they were Ctrl only). **Windows**: "Pull and recreate" no longer needs `sh`.

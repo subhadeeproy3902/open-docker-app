@@ -5,7 +5,7 @@ import time
 from gi.repository import Adw, Gio, GLib, Gtk
 
 from . import backups as bk, db, dbtools
-from .util import (PageHeader, WidePrefs, ago, bg, confirm, esc, flat_page, fmt_bytes, icon_button, label, open_uri)
+from .util import (follow_content, PageHeader, WidePrefs, ago, bg, confirm, esc, flat_page, fmt_bytes, icon_button, label, open_uri)
 
 
 def _targets(store):
@@ -85,6 +85,7 @@ class ScheduleDialog(Adw.Dialog):
             g2.set_description(note)
         tv.set_content(pp)
         self.set_child(tv)
+        follow_content(self, 520)
         self._sync()
 
     def _sync(self):
@@ -404,6 +405,7 @@ class RestoreDialog(Adw.Dialog):
         pp.add(self.note)
         tv.set_content(pp)
         self.set_child(tv)
+        follow_content(self, 520)
         self._sync()
 
     def _sync(self):

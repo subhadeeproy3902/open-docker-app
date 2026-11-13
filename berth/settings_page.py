@@ -140,8 +140,9 @@ class SettingsPage(Gtk.Box):
             b = Gtk.Button(label=text, tooltip_text=tip, valign=Gtk.Align.CENTER)
             if css:
                 b.add_css_class(css)
-            b.connect("clicked", lambda _b, f=fn: f())
+            b.connect("clicked", lambda _b, f=fn: (f(), GLib.timeout_add(1500, lambda: self.on_show() and False)))
             self.proxy_row.add_suffix(b)
+            setattr(self, "proxy_" + text.lower(), b)
         self.proxy_g.add(self.proxy_row)
         manage = Adw.ActionRow(title="Addresses, ports and public links", subtitle="Open Ports &amp; sharing",
                                activatable=True)
@@ -265,6 +266,9 @@ class SettingsPage(Gtk.Box):
         n = len(self.s["routes"] or [])
         self.proxy_row.set_subtitle(("Running" if p.get("State") == "running" else "Stopped") + f" · {n} address"
                                     + ("es" if n != 1 else "") if p else "Not set up — it starts when you add an address")
+        # only what can be done: nothing to stop or remove before the proxy exists, nothing to stop when stopped
+        self.proxy_stop.set_visible(bool(p) and p.get("State") == "running")
+        self.proxy_remove.set_visible(bool(p))
         self._fill_engines()
         self._fill_registries()
         up = bool(self.store.up)

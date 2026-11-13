@@ -4,10 +4,19 @@ import os
 from gi.repository import Adw, Gio, GLib, Gtk
 
 from .cli import CommandDialog
-from .util import bg, confirm, esc, labels
+from .util import follow_content, bg, confirm, esc, labels
 
 
 ICONS = {"error": "dialog-error-symbolic", "warning": "dialog-warning-symbolic", "info": "dialog-information-symbolic"}
+
+
+def check_inputs(store):
+    """(containers, volumes, networks, images) for a Compose check — fetched now for lists no page has loaded yet
+    (otherwise every image would look like it still has to be downloaded). Call from a worker thread."""
+    e = store.engine
+    return (store.containers, store.volumes if store.volumes is not None else e.volumes(),
+            store.networks if store.networks is not None else e.networks(),
+            store.images if store.images is not None else e.images())
 
 
 def show_checks(group, rows, results):
@@ -193,7 +202,11 @@ class ComposeOpen(Adw.Dialog):
         hb.pack_start(cancel)
         hb.pack_end(self.go)
         tv.add_top_bar(hb)
-        pp = Adw.PreferencesPage()
+        # a box in a scroller that follows its content: the check results below appear after the dialog opened,
+        # and a PreferencesPage would keep the dialog at its first height (so they'd stay out of sight)
+        pp = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=18, margin_start=18, margin_end=18, margin_top=6,
+                     margin_bottom=18)
+        pp.add = pp.append
         g = Adw.PreferencesGroup()
         self.file_row = Adw.ActionRow(title="Compose file", subtitle="Choose a compose.yaml / docker-compose.yml", activatable=True)
         self.file_row.add_suffix(Gtk.Image(icon_name="document-open-symbolic"))
@@ -208,8 +221,10 @@ class ComposeOpen(Adw.Dialog):
         self.checks = Adw.PreferencesGroup(title="Check", visible=False)
         pp.add(self.checks)
         self._check_rows = []
-        tv.set_content(pp)
+        tv.set_content(Gtk.ScrolledWindow(child=pp, propagate_natural_height=True, max_content_height=620,
+                                          hscrollbar_policy=Gtk.PolicyType.NEVER))
         self.set_child(tv)
+        follow_content(self, 560)
 
     def _pick(self):
         flt = Gtk.FileFilter()
@@ -242,7 +257,8 @@ class ComposeOpen(Adw.Dialog):
         self.checks.set_visible(True)
         self.checks.set_description("Checking the file…")
         name = self.name.get_text().strip() or None
-        bg(compose_check.check, [self.file], st.containers, st.volumes, st.networks, st.images, name,
+        f = self.file
+        bg(lambda: compose_check.check([f], *check_inputs(st), name),
            done=lambda res: show_checks(self.checks, self._check_rows, res), error=lambda e: None)
 
     def _go(self):

@@ -11,7 +11,7 @@ from . import charts
 from .cli import CommandDialog, run_capture
 from .files import FileBrowser, clone_volume, export_volume, import_volume, start_volume_helper, stop_volume_helper
 from .scan import ScanDialog
-from .util import (release_on_leave, Row, ago, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
+from .util import (follow_content, release_on_leave, Row, ago, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
                    fmt_rate, icon_button, label, labels, ordering, thread, detail_tag, push_detail, WidePrefs,
                    toolbar_row, PageHeader, flat_page, table_card)
 
@@ -290,6 +290,7 @@ class BuildDialog(Adw.Dialog):
         self.stack.add_named(self.log_sw, "log")
         tv.set_content(self.stack)
         self.set_child(tv)
+        follow_content(self, 560)
 
     def _pick(self, folder):
         d = Gtk.FileDialog(title="Build folder" if folder else "Dockerfile", accept_label="Choose")
@@ -767,6 +768,7 @@ class PullDialog(Adw.Dialog):
         box.append(self.results_sw)
         tv.set_content(box)
         self.set_child(tv)
+        follow_content(self, 560)
         self._gen = 0
         if ref:
             self.entry.set_text(ref)
@@ -787,7 +789,8 @@ class PullDialog(Adw.Dialog):
             while (ch := self.results.get_first_child()):
                 self.results.remove(ch)
             self.results_sw.set_visible(bool(res))
-            for r in res or []:
+            res = sorted(res or [], key=lambda r: (not r.get("is_official"), -int(r.get("star_count") or 0)))
+            for r in res:
                 name = r.get("name", "")
                 row = Adw.ActionRow(title=esc(name), subtitle=esc((r.get("description") or "")[:140]), activatable=True)
                 if r.get("is_official"):
@@ -795,6 +798,8 @@ class PullDialog(Adw.Dialog):
                 row.add_suffix(Gtk.Label(label=f"★ {r.get('star_count', 0)}", css_classes=["dim-label", "numeric"]))
                 row.connect("activated", lambda _r, n=name: (self.entry.set_text(n), self._pull(n)))
                 self.results.append(row)
+            # the dialog keeps its first size: ask for room for the rows (up to about six, then it scrolls)
+            self.results_sw.set_min_content_height(min(400, 66 * len(res or [])))
         GLib.timeout_add(350, lambda: gen == self._gen and bg(self.store.engine.search, q, done=done,
                                                               error=lambda e: None) and False)
 

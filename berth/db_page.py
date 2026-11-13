@@ -89,7 +89,9 @@ class ResultGrid(Gtk.Box):
                                           enable_show_gesture=False, css_classes=["db-split"])
         self.split.set_content(self.stack)
         self.split.set_sidebar(self.panel)
-        self.split.connect("notify::show-sidebar", lambda *_: self.split.get_show_sidebar() or self._unselect())
+        # closing the panel clears a single-row selection, but not several rows picked for copy / delete
+        self.split.connect("notify::show-sidebar", lambda *_: self.split.get_show_sidebar() or
+                           len(self.positions()) > 1 or self._unselect())
         self.append(self.split)
         self.message("Nothing to show yet", "", "view-grid-symbolic")
 
@@ -416,6 +418,34 @@ def _default_hint(d):
     return f"Leave empty for the default: {d}"
 
 
+def _fit_height(tv):
+    """A Gtk.TextView doesn't grow to fit its wrapped text on its own (it measures with the width it had before).
+    Measure the text with Pango at the view's real width and ask for exactly that height — again whenever the
+    width or the text changes."""
+    state = {"w": -1, "text": None}
+
+    def fit(*_a):
+        w = tv.get_width()
+        b = tv.get_buffer()
+        text = b.get_text(b.get_start_iter(), b.get_end_iter(), False)
+        if w <= 0 or (w == state["w"] and text == state["text"]):
+            return True
+        state["w"], state["text"] = w, text
+        lay = tv.create_pango_layout(text or " ")
+        lay.set_width(max(1, w - tv.get_left_margin() - tv.get_right_margin()) * Pango.SCALE)
+        lay.set_wrap(Pango.WrapMode.WORD_CHAR)
+        h = lay.get_pixel_size()[1] + tv.get_top_margin() + tv.get_bottom_margin()
+        tv.set_size_request(-1, h)
+        return True
+
+    def poll():
+        if tv.get_root() is None and state["w"] != -1:
+            return False                                   # the panel was rebuilt: this view is gone
+        fit()
+        return True
+    GLib.timeout_add(150, poll)
+
+
 def _hex_preview(h, n=48):
     b = h[:n * 2]
     return " ".join(b[i:i + 2] for i in range(0, len(b), 2)) + (" …" if len(h) > n * 2 else "")
@@ -631,11 +661,18 @@ class RecordPanel(Gtk.Box):
             if f.value is None and not self.is_new:
                 tv.add_css_class("db-null")
             tv.get_buffer().connect("changed", lambda *_: self._touched(w))
-            big = f.json or len(text) > 240 or "\n" in text
-            sw = Gtk.ScrolledWindow(child=tv, propagate_natural_height=True, max_content_height=420,
-                                    hscrollbar_policy=Gtk.PolicyType.NEVER, css_classes=["db-value-frame"],
-                                    vscrollbar_policy=Gtk.PolicyType.AUTOMATIC if big else Gtk.PolicyType.NEVER)
-            box.append(sw)
+            if len(text) > 1500 or text.count("\n") > 18:
+                # long values scroll inside a box of at most 420 px
+                sw = Gtk.ScrolledWindow(child=tv, propagate_natural_height=True, max_content_height=420,
+                                        hscrollbar_policy=Gtk.PolicyType.NEVER, css_classes=["db-value-frame"])
+                box.append(sw)
+            else:
+                # shorter ones: the text view sits in the frame directly, so it grows to fit every wrapped line
+                frame = Gtk.Box(css_classes=["db-value-frame"])
+                tv.set_hexpand(True)
+                frame.append(tv)
+                box.append(frame)
+                _fit_height(tv)
             w["view"] = tv
             hint = ""
             if self.is_new and f.default:
@@ -1018,8 +1055,10 @@ class Explorer(Gtk.Box):
             moved = None
             # The default database is often empty while the data lives in another one (one database per service):
             # open the one that holds data, unless the user picked a database themselves.
-            if dbs and len(dbs) > 1 and not self._picked_db and not self._has_leaves(nodes):
-                best = self.b.richest(dbs)
+            # (also when the default database doesn't exist at all — MongoDB's "test" — even if only one other does)
+            missing = bool(dbs) and str(self.b.db) not in [str(d) for d in dbs]
+            if dbs and (len(dbs) > 1 or missing) and not self._picked_db and not self._has_leaves(nodes):
+                best = self.b.richest(dbs) or (dbs[0] if missing else None)
                 if best and str(best) != str(self.b.db):
                     moved = self.b.db
                     self.b.db = best

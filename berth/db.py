@@ -318,7 +318,13 @@ class Backend:
         return ""
 
     def close(self):
-        pass
+        hid = getattr(self, "_http_helper", None)
+        if hid:
+            try:
+                self.engine.action(hid, "stop")      # auto-removed when it stops
+            except Exception:  # noqa: BLE001
+                pass
+            self._http_helper = None
 
     def which(self, *names):
         """First of `names` that exists in the container (None if none)."""
@@ -1156,10 +1162,35 @@ class Http:
         self.base = (host, port, scheme)
         return r.status, raw.decode(errors="replace")
 
+    def _helper(self):
+        """A tiny curl container inside the target's network namespace — for images without curl or wget when the
+        port can't be reached from here (Docker Desktop on macOS / Windows: container IPs aren't routable)."""
+        hid = getattr(self.b, "_http_helper", None)
+        eng = self.b.engine
+        if hid:
+            try:
+                if (eng.inspect(hid).get("State") or {}).get("Running"):
+                    return hid
+            except Exception:  # noqa: BLE001
+                pass
+        from .sharing import ensure_image
+        image = "curlimages/curl:8.11.1"
+        ensure_image(eng, image)
+        r = eng.create_container(None, {"Image": image, "Entrypoint": ["sleep", "3600"],
+                                        "Labels": {"io.github.subhadeeproy3902.berth.helper": "http"},
+                                        "HostConfig": {"NetworkMode": f"container:{self.b.cid}", "AutoRemove": True}})
+        eng.action(r["Id"], "start")
+        self.b._http_helper = r["Id"]
+        return r["Id"]
+
     def _inside(self, method, path, data, hdr, timeout, errors):
         tool = self.b.which("curl", "wget")
-        if not tool:
-            raise DbError(f"Can't reach port {self.port} of {self.b.name}. " + " · ".join(errors[-2:]))
+        helper = None
+        if not tool or (tool == "wget" and method not in ("GET", "POST")):
+            try:
+                helper, tool = self._helper(), "curl"
+            except Exception as e:  # noqa: BLE001
+                raise DbError(f"Can't reach port {self.port} of {self.b.name} ({e}). " + " · ".join(errors[-2:]))
         url = f"{self.scheme or 'http'}://127.0.0.1:{self.port}{path}"
         if tool == "curl":
             cmd = ["curl", "-sS", "-k", "-X", method, "-w", "\n%{http_code}", url]
@@ -1175,7 +1206,10 @@ class Http:
                 cmd += [f"--header={k}: {v}"]
             if data is not None:
                 cmd += [f"--post-data={data.decode()}"]
-        code, out, err, _t = self.b.exec(cmd, timeout=timeout)
+        if helper:
+            code, out, err = self.b.engine.exec_run(helper, cmd, limit=OUT_LIMIT, timeout=timeout)
+        else:
+            code, out, err, _t = self.b.exec(cmd, timeout=timeout)
         if tool == "curl":
             body, _, status = out.rpartition("\n")
             if code != 0 or not status.isdigit():

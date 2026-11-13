@@ -11,6 +11,24 @@ import time
 import traceback
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+# Safety: these suites create, stop and delete containers. They only run against the demo engine
+# (tools/demo/up.sh → tcp://127.0.0.1:23750) unless BERTH_TEST_ANY_ENGINE=1 says otherwise.
+def _guard_engine():
+    import json as _json
+    cfg = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config"), "berth", "settings.json")
+    try:
+        with open(cfg) as _f:
+            eng = _json.load(_f).get("engine", "")
+    except (OSError, ValueError):
+        eng = ""
+    if eng != "tcp://127.0.0.1:23750" and not os.environ.get("BERTH_TEST_ANY_ENGINE"):
+        sys.exit(f"Refusing to run: the configured engine is {eng or 'the default (your real Docker)'}, not the demo "
+                 "engine. Start it with tools/demo/up.sh and point XDG_CONFIG_HOME at a config with "
+                 '"engine": "tcp://127.0.0.1:23750" (or set BERTH_TEST_ANY_ENGINE=1 on purpose).')
+
+
+_guard_engine()
+
 import gi  # noqa: E402
 
 gi.require_version("Gtk", "4.0")

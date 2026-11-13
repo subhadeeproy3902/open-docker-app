@@ -599,3 +599,12 @@ def ensure_tooltips(root):
             stack.append(c)
             c = c.get_next_sibling()
     return False
+
+
+def follow_content(dialog, width):
+    """Let a dialog grow and shrink with its content while it is open (results that arrive later, sections that
+    appear). Without this an Adw.Dialog keeps the size it had when it opened. The width stays fixed."""
+    dialog.set_follows_content_size(True)
+    child = dialog.get_child()
+    if child is not None:
+        child.set_size_request(width, -1)

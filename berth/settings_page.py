@@ -128,6 +128,23 @@ class SettingsPage(Gtk.Box):
         choice(ga2, "Docker disk", "Free space left where Docker keeps its data", "alert_disk",
                ["Off", "Below 20 %", "Below 10 %", "Below 5 %"], [0, 20, 10, 5])
         pp.add(ga2)
+        gai = Adw.PreferencesGroup(title="Local AI and assistants")
+        choice(gai, "Stop Ollama when unused", "Frees its memory; Local AI → Start brings it back", "ai_idle_stop",
+               ["Never", "After 15 minutes", "After 30 minutes", "After 1 hour"], [0, 15, 30, 60])
+        mcp = Adw.SwitchRow(title="Let assistants start, stop and restart containers",
+                            subtitle="For AI assistants connected through Berth's MCP server. Reading containers, "
+                                     "logs and images is always allowed; changing them only with this on.",
+                            active=bool(settings["mcp_actions"]))
+        mcp.connect("notify::active", lambda r, *_: settings.__setitem__("mcp_actions", r.get_active()))
+        gai.add(mcp)
+        snippet = json.dumps({"mcpServers": {"berth": {"command": "berth", "args": ["--mcp"]}}}, indent=2)
+        mrow = Adw.ActionRow(title="Connect an assistant", subtitle="Add Berth to Claude, Cursor, VS Code or any MCP "
+                             "client: command <tt>berth --mcp</tt>", activatable=True)
+        cpy = Gtk.Button(label="Copy config", valign=Gtk.Align.CENTER)
+        cpy.connect("clicked", lambda *_: (self.get_clipboard().set(snippet), win.toast("Copied the MCP config")))
+        mrow.add_suffix(cpy)
+        gai.add(mrow)
+        pp.add(gai)
 
         self.eng = Adw.PreferencesGroup(title="Docker Engine")
         self.endpoints = []

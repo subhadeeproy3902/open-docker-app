@@ -61,6 +61,14 @@ and the project uses [Semantic Versioning](https://semver.org/).
   name per database; Run uses only the selected text when something is selected.
 - **Schema editing** (PostgreSQL, MySQL / MariaDB — Structure view): new table, add / rename / drop a column, add an
   index. Each dialog shows the exact SQL first and runs it only with "Allow changes" on.
+- **Local AI** (#24, sidebar → Local AI): open models through an Ollama container — pick one by download size and the
+  memory it needs (with a warning when that's more than is free), download with live progress, chat, copy the
+  OpenAI-compatible address. CPU by default; the NVIDIA GPU only when you switch it on. Ollama stops after a while
+  without use (Settings → Local AI and assistants).
+- **MCP server** (#24): `berth --mcp` lets AI assistants (Claude, Cursor, VS Code…) list containers, read logs and
+  details and list images. Starting, stopping and restarting needs a switch in Settings; "Copy config" gives the
+  snippet for the assistant.
+- Berth removes the client containers of outside databases when it quits.
 
 ### Changed
 - Flatpak builds on the GNOME 51 runtime (was 48). A Flathub-ready manifest that builds a pinned release tag is in

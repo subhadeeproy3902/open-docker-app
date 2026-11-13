@@ -128,6 +128,15 @@ class SettingsPage(Gtk.Box):
         choice(ga2, "Docker disk", "Free space left where Docker keeps its data", "alert_disk",
                ["Off", "Below 20 %", "Below 10 %", "Below 5 %"], [0, 20, 10, 5])
         pp.add(ga2)
+        gh = Adw.PreferencesGroup(title="History", description="Keep a minute-by-minute record of every container's "
+                                  "CPU and memory, with starts, stops, crashes and pulls marked — for the 6 h, 24 h and "
+                                  "7 d ranges on Resource usage. Recorded only while Berth runs.")
+        hs = Adw.SwitchRow(title="Keep metrics history", active=bool(settings["history"]))
+        hs.connect("notify::active", lambda r, *_: settings.__setitem__("history", r.get_active()))
+        gh.add(hs)
+        choice(gh, "Keep it for", "Older days are deleted (at most 100 MB in all)", "history_days",
+               ["1 day", "7 days", "30 days"], [1, 7, 30])
+        pp.add(gh)
         gai = Adw.PreferencesGroup(title="Local AI and assistants")
         choice(gai, "Stop Ollama when unused", "Frees its memory; Local AI → Start brings it back", "ai_idle_stop",
                ["Never", "After 15 minutes", "After 30 minutes", "After 1 hour"], [0, 15, 30, 60])

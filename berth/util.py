@@ -12,7 +12,7 @@ from concurrent.futures import ThreadPoolExecutor
 from gi.repository import Adw, Gio, GLib, GObject, Gtk
 
 APP_ID = "io.github.subhadeeproy3902.Berth"
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 ICON = os.environ.get("BERTH_ICON") or APP_ID     # icon name; `make install ICON=docker-desktop` swaps it
 
 
@@ -225,7 +225,7 @@ class Settings:
                 "send_port": 8787, "backups": [], "notify": True, "update_check": True, "update_skip": "", "stacks": [],
                 "safe_update": False, "alert_cpu": 0, "alert_mem": 0, "alert_disk": 0,
                 "scan_schedule": "off", "scan_last": 0, "registries": [], "log_queries": {}, "db_saved": {}, "db_external": [], "mcp_actions": False,
-                "ai_idle_stop": 30}
+                "ai_idle_stop": 30, "history": False, "history_days": 7, "otel": False}
 
     def __init__(self):
         self.path = os.path.join(GLib.get_user_config_dir(), "berth", "settings.json")
@@ -380,6 +380,39 @@ def label(text="", css=(), xalign=0.0, ellipsize=True, **kw):
     for c in css:
         lb.add_css_class(c)
     return lb
+
+
+def set_busy(button, busy, tip=None):
+    """While an action runs: a small ring spinner in place of the button's icon or label, and the button disabled
+    (so it can't be pressed twice). The button keeps its width, so nothing around it moves. Done: back as it was —
+    unless the code already gave the button a new label or icon meanwhile, which then stays."""
+    if button is None:
+        return
+    if busy:
+        spin = getattr(button, "_spin", None)
+        if spin is None or button.get_child() is not spin:
+            w = button.get_width()
+            button._busy = (button.get_child(), button.get_tooltip_text(), button.get_size_request())
+            if w > 0:
+                button.set_size_request(w, -1)
+            spin = button._spin = Adw.Spinner(width_request=16, height_request=16, halign=Gtk.Align.CENTER,
+                                              valign=Gtk.Align.CENTER)
+            button.set_child(spin)
+            if tip:
+                button.set_tooltip_text(tip)
+        button.add_css_class("busy")
+        button.set_sensitive(False)
+    else:
+        st, spin = getattr(button, "_busy", None), getattr(button, "_spin", None)
+        if st is not None:
+            child, tip_old, req = st
+            if spin is not None and button.get_child() is spin:
+                button.set_child(child)
+                button.set_tooltip_text(tip_old)
+            button.set_size_request(*req)
+            button._busy = button._spin = None
+        button.remove_css_class("busy")
+        button.set_sensitive(True)
 
 
 def icon_button(icon, tooltip, cb=None, css=("flat",)):

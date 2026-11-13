@@ -14,6 +14,7 @@ from .scan import ScanDialog, run_scan, serious
 from .util import (follow_content, release_on_leave, Row, ago, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
                    fmt_rate, icon_button, label, labels, ordering, thread, detail_tag, push_detail, WidePrefs,
                    toolbar_row, PageHeader, flat_page, table_card)
+from .util import set_busy  # noqa: E402
 
 
 def save_dialog(win, title, name, then):
@@ -348,7 +349,7 @@ class BuildDialog(Adw.Dialog):
                                               self.win.toast(f"Built {tag}" if ok else f"Build of {tag} failed"))
                           ).present(self.win)
             return
-        self.go_btn.set_sensitive(False)
+        set_busy(self.go_btn, True)
         self.stack.set_visible_child_name("log")
         buf = self.log.get_buffer()
 
@@ -361,7 +362,7 @@ class BuildDialog(Adw.Dialog):
             self.win.toast(f"Built {tag}")
             self.finished = True
             self.go_btn.set_label("Close")
-            self.go_btn.set_sensitive(True)
+            set_busy(self.go_btn, False)
 
         def fail(e):
             buf.insert(buf.get_end_iter(), f"\n✗ {e}\n")
@@ -532,14 +533,14 @@ class ImagesPage(TablePage):
         if not self.store.images:
             return
         if hasattr(self, "upd_btn"):
-            self.upd_btn.set_sensitive(False)
+            set_busy(self.upd_btn, True)
             self.upd_btn.set_label("Checking…")
 
         def done(res):
             res["_checked"] = time.time()
             self.updates = res
             _save_updates(res)
-            self.upd_btn.set_sensitive(True)
+            set_busy(self.upd_btn, False)
             self.upd_btn.set_label("Check for updates")
             n = sum(1 for k, v in res.items() if v is True)
             unknown = sum(1 for k, v in res.items() if v is None and not k.startswith("_"))
@@ -553,7 +554,7 @@ class ImagesPage(TablePage):
             self._fill()
 
         def fail(e):
-            self.upd_btn.set_sensitive(True)
+            set_busy(self.upd_btn, False)
             self.upd_btn.set_label("Check for updates")
             if not quiet:
                 self.win.toast(f"Couldn't check: {e}")
@@ -784,7 +785,9 @@ class ImageDetail(Adw.NavigationPage):
                      ("Used by", ", ".join(self.d["used"]) or "no containers")):
             g.add(Adw.ActionRow(title=t, subtitle=esc(v), subtitle_selectable=True))
         self.pp.add(g)
-        self.pp.add(layer_group(hist))
+        ref = self.d["ref"] if self.d["repo"] != "<none>" else self.d["id"]
+        self.pp.add(layer_group(hist, lambda i, text: __import__("berth.layers", fromlist=["x"]).open_files(
+            self.page.win, self.page.store, ref, i, len(hist), text, ins.get("Size") or 0)))
 
 
 def _layer_cmd(h):
@@ -821,7 +824,7 @@ class SizeBar(Gtk.DrawingArea):
             x += share * w
 
 
-def layer_group(hist):
+def layer_group(hist, on_files=None):
     """The layers of an image (#13): newest step first, size and share of each, the biggest ones highlighted, and a bar
     that shows where the size goes. Metadata-only steps (ENV, CMD, …) are 0 B and dimmed."""
     total = sum(h.get("Size", 0) for h in hist) or 1
@@ -865,6 +868,11 @@ def layer_group(hist):
             r.add_suffix(pill)
         elif not size:
             r.add_css_class("dim-label")
+        if size and on_files:
+            fb = Gtk.Button(label="Files", valign=Gtk.Align.CENTER, tooltip_text="What this step added or deleted")
+            fb.add_css_class("flat")
+            fb.connect("clicked", lambda *_a, i=i, t=_layer_cmd(h): on_files(i, t))
+            r.add_suffix(fb)
         g.add(r)
     if len(hist) > 200:
         g.add(Adw.ActionRow(title=f"… and {len(hist) - 200} more steps"))
@@ -944,7 +952,7 @@ class PullDialog(Adw.Dialog):
     def _pull(self, ref):
         if not ref:
             return
-        self.btn.set_sensitive(False)
+        set_busy(self.btn, True)
         self.progress.set_visible(True)
         self.progress.set_fraction(0)
         self.progress.set_text(f"Pulling {ref}…")
@@ -987,7 +995,7 @@ class PullDialog(Adw.Dialog):
             return False
 
         def done(_r):
-            self.btn.set_sensitive(True)
+            set_busy(self.btn, False)
             if state["err"]:
                 self.progress.set_text(state["err"])
                 return
@@ -997,7 +1005,7 @@ class PullDialog(Adw.Dialog):
             self.store.refresh("images")
 
         def fail(e):
-            self.btn.set_sensitive(True)
+            set_busy(self.btn, False)
             self.progress.set_text(str(e))
         bg(work, done=done, error=fail)
 
@@ -1175,7 +1183,7 @@ class RunDialog(Adw.Dialog):
             self.win.toast(f"Check the settings: {e}")
             return
         name = self.name.get_text().strip()
-        self.run_btn.set_sensitive(False)
+        set_busy(self.run_btn, True)
 
         def work():
             r = self.store.engine.create_container(name, cfg)
@@ -1190,7 +1198,7 @@ class RunDialog(Adw.Dialog):
                 self.win.show_container(cid)
 
         def fail(e):
-            self.run_btn.set_sensitive(True)
+            set_busy(self.run_btn, False)
             self.win.toast(str(e))
         bg(work, done=done, error=fail)
 
@@ -1826,11 +1834,22 @@ class ResourcesPage(Gtk.Box):
         tv = Adw.ToolbarView(vexpand=True)
         self.header = PageHeader("Resource usage", "Live CPU, memory, network and disk — read only while this page is open")
         self.range = Adw.ToggleGroup(can_shrink=False)
-        for name, lbl in (("60", "1 min"), ("300", "5 min"), ("600", "10 min"), ("1800", "30 min")):
+        for name, lbl in (("60", "1 min"), ("300", "5 min"), ("600", "10 min"), ("1800", "30 min"),
+                          ("21600", "6 h"), ("86400", "24 h"), ("604800", "7 d")):
             self.range.add(Adw.Toggle(name=name, label=lbl))
         self.range.set_active_name(str(settings["range"] or 600))
-        self.range.connect("notify::active-name", lambda *_: (self.settings.__setitem__("range", int(self.range.get_active_name())), self.update(force=True)))
-        flat_page(tv, self.header, toolbar_row(label("Show the last", css=["dim-label"], valign=Gtk.Align.CENTER), self.range))
+        self.range.connect("notify::active-name", lambda *_: (self.settings.__setitem__("range", int(self.range.get_active_name())), self._hist_load(), self.update(force=True)))
+        # metrics history (#28): the long ranges read what Berth recorded, with events marked on the charts
+        self.compare = Gtk.ToggleButton(label="Compare with the day before", visible=False,
+                                        tooltip_text="Draw the same hours of the previous day as a dashed line")
+        self.compare.connect("toggled", lambda *_: self._hist_load())
+        self.hist_note = label("", css=["dim-label", "caption"], valign=Gtk.Align.CENTER)
+        flat_page(tv, self.header, toolbar_row(label("Show the last", css=["dim-label"], valign=Gtk.Align.CENTER),
+                                               self.range, self.compare, self.hist_note))
+        self.hist, self.hist_at = None, 0
+        if settings["history"]:
+            self.header.set_subtitle("Live numbers while this page is open; with history, a sample every minute "
+                                     "while Berth runs")
         body = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=16, css_classes=["page-body"])
         # 4 tiles side by side; the window's breakpoint switches this to 2 × 2 on narrow windows (never 3 + 1)
         tiles = Gtk.FlowBox(homogeneous=True, min_children_per_line=4, max_children_per_line=4, column_spacing=12,
@@ -1856,6 +1875,8 @@ class ResourcesPage(Gtk.Box):
         self.charts_box = row
         self.ch_cpu = charts.LineChart(lambda v: fmt_pct(v), 200)
         self.ch_mem = charts.LineChart(fmt_bytes, 200, binary=True)
+        for ch in (self.ch_cpu, self.ch_mem):        # a spike on a chart → the logs of that moment
+            ch.on_click = self._logs_at
         self.legends = {}
         for title, ch, key in (("CPU by stack · % of all threads", self.ch_cpu, "cpu"), ("Memory by stack", self.ch_mem, "mem")):
             card = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, css_classes=["card", "chart-card"])
@@ -1910,16 +1931,72 @@ class ResourcesPage(Gtk.Box):
         pal = charts.palette()
         return [(n, pal[i % len(pal)], pts) for i, (_, n, pts) in enumerate(out)]
 
+    # ── history (#28) ──
+    def _hist_load(self):
+        from . import history
+        win = int(self.range.get_active_name() or 600)
+        on = bool(self.settings["history"])
+        self.compare.set_visible(on and win > 1800)
+        if not on:
+            self.hist = None
+            self.hist_note.set_text("Longer ranges need Settings → History" if win > 1800 else "")
+            return
+        now = time.time()
+        cmp_ = self.compare.get_active() and win > 1800
+
+        def work():
+            cur = history.load(now - win, now)
+            prev = history.load(now - win - 86400, now - 86400) if cmp_ else None
+            return cur, prev
+        def done(r):
+            self.hist, self.hist_prev = r
+            self.hist_at = time.time()
+            n = sum(len(v) for v in r[0][0].values())
+            self.hist_note.set_text("" if n or win <= 1800 else "No history recorded for this range yet")
+            self.update(force=True)
+        bg(work, done=done, error=lambda e: self.hist_note.set_text(f"History: {e}"))
+
+    def _hist_series(self, data, idx, scale=1.0, shift=0):
+        series, projects, _ev = data
+        proj = {}
+        for name, pts in series.items():
+            m = proj.setdefault(projects.get(name) or name, {})
+            for p in pts:
+                t = int(p[0] // 60 * 60) + shift
+                m[t] = m.get(t, 0) + p[idx] * scale
+        out = sorted(((sorted(m.items()), n) for n, m in proj.items()), key=lambda x: -(x[0][-1][1] if x[0] else 0))
+        pal = charts.palette()
+        return [(n, pal[i % len(pal)], pts) for i, (pts, n) in enumerate(out)]
+
+    def _logs_at(self, t):
+        self.win.go("logs")
+        self.win.pages["logs"].show_time(t)
+
     def update(self, force=False):
         if not (force or self.get_mapped()):
             return
+        from . import history
         s = self.store.sampler
         allpts = s.all_points()
         win = int(self.range.get_active_name() or 600)
-        cpu = self._by_project(allpts, 1, 1 / s.ncpu)
-        mem = self._by_project(allpts, 2)
-        self.ch_cpu.set_data(cpu, win)
-        self.ch_mem.set_data(mem, win)
+        if self.settings["history"] and (self.hist is None or time.time() - self.hist_at > 60) and \
+                not getattr(self, "_hist_busy", False):
+            self._hist_busy = True
+            GLib.idle_add(lambda: (setattr(self, "_hist_busy", False), self._hist_load()) and False)
+        marks = history.markers(self.hist[0][2]) if self.hist else []
+        if win > 1800 and self.hist:
+            cpu = self._hist_series(self.hist[0], 1, 1 / s.ncpu)
+            mem = self._hist_series(self.hist[0], 2)
+            prev = getattr(self, "hist_prev", None)
+            if prev:
+                cpu.append(("the day before", "#77767b", _total(self._hist_series(prev, 1, 1 / s.ncpu, shift=86400))))
+                mem.append(("the day before", "#77767b", _total(self._hist_series(prev, 2, shift=86400))))
+            self.ch_cpu.dashed = self.ch_mem.dashed = {"the day before"} if prev else set()
+        else:
+            cpu = self._by_project(allpts, 1, 1 / s.ncpu)
+            mem = self._by_project(allpts, 2)
+        self.ch_cpu.set_data(cpu, win, marks)
+        self.ch_mem.set_data(mem, win, marks)
         for key, ch, ser in (("cpu", self.ch_cpu, cpu), ("mem", self.ch_mem, mem)):
             holder, sig = self.legends[key]
             new = tuple((n, c) for n, c, _ in ser)
@@ -1962,6 +2039,15 @@ class ResourcesPage(Gtk.Box):
                 r.spark.set_values([q[2] for q in pts])
             else:
                 r.set_visible(False)
+
+
+def _total(series):
+    """One line: the sum of several series at each time."""
+    acc = {}
+    for _n, _c, pts in series:
+        for t, v in pts:
+            acc[t] = acc.get(t, 0) + v
+    return sorted(acc.items())
 
 
 # ───────────────────────────── Disk usage ─────────────────────────────

@@ -9,6 +9,7 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 from . import fileshare as fs
 from . import qr
 from .util import PageHeader, app_icon, bg, flat_page, icon_button, label, open_uri
+from .util import set_busy  # noqa: E402
 
 EXPIRY = [("1 hour", 3600), ("15 minutes", 900), ("4 hours", 4 * 3600), ("1 day", 86400), ("Never", None)]
 LIMITS = [("No limit", None), ("1 download", 1), ("5 downloads", 5), ("10 downloads", 10)]
@@ -209,7 +210,7 @@ class SendPage(Gtk.Box):
         if not sh or not self.store.up:
             self.win.toast("Public links need a running Docker engine (they use Cloudflare's cloudflared container)")
             return
-        btn.set_sensitive(False)
+        set_busy(btn, True)
         btn.set_label("Starting…")
 
         def done(r):
@@ -220,7 +221,7 @@ class SendPage(Gtk.Box):
             self.refresh()
 
         def fail(e):
-            btn.set_sensitive(True)
+            set_busy(btn, False)
             btn.set_label("Public link")
             self.win.toast(f"Public link failed: {e}")
         bg(fs.start_public, self.store.engine, self.server.port, done=done, error=fail)

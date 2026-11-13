@@ -10,6 +10,7 @@ from gi.repository import Adw, GLib, Gtk, Pango
 
 from .cli import CommandDialog
 from .util import PageHeader, bg, esc, flat_page, fmt_bytes, label
+from .util import set_busy  # noqa: E402
 
 NAME, IMAGE, VOLUME, PORT = "berth-ollama", "ollama/ollama:latest", "berth-ollama-models", 11434
 ROLE = "io.github.subhadeeproy3902.berth.role"
@@ -65,12 +66,12 @@ def free_memory(info, local):
     return info.get("MemTotal") or 0
 
 
-def start(engine, gpu=False):
+def start(engine, gpu=False, progress=None):
     """Create (first time) and start the Ollama container: port 11434 on this computer only, models in a volume."""
     from .sharing import ensure_image
     c = find(engine)
     if c is None:
-        ensure_image(engine, IMAGE)
+        ensure_image(engine, IMAGE, progress)
         hc = {"PortBindings": {f"{PORT}/tcp": [{"HostIp": "127.0.0.1", "HostPort": str(PORT)}]},
               "Binds": [f"{VOLUME}:/root/.ollama"], "RestartPolicy": {"Name": "no"}}
         if gpu:
@@ -286,14 +287,16 @@ class AiPage(Gtk.Box):
 
     def _toggle(self):
         running = bool(getattr(self, "_c", None) and self._c.get("State") == "running")
-        self.btn.set_sensitive(False)
+        set_busy(self.btn, True)
         self.state_row.set_subtitle("Stopping…" if running else "Starting… (the first time downloads Ollama)")
-        fn = (lambda: stop(self.store.engine)) if running else (lambda: start(self.store.engine, self.gpu.get_active()))
+        say = lambda t: GLib.idle_add(lambda: self.state_row.set_subtitle(t) and False)
+        fn = (lambda: stop(self.store.engine)) if running else \
+            (lambda: start(self.store.engine, self.gpu.get_active(), say))
 
         def done(_r):
-            self.btn.set_sensitive(True)
+            set_busy(self.btn, False)
             GLib.timeout_add(1500, lambda: self.refresh() and False)
-        bg(fn, done=done, error=lambda e: (self.btn.set_sensitive(True), self.win.toast(f"Ollama: {e}")))
+        bg(fn, done=done, error=lambda e: (set_busy(self.btn, False), self.win.toast(f"Ollama: {e}")))
 
     def _pull(self, name, tight):
         def go():
@@ -343,19 +346,19 @@ class AiPage(Gtk.Box):
         self._bubble("you", text)
         self.messages.append({"role": "user", "content": text})
         bubble = self._bubble(it.get_string(), "…")
-        self.send.set_sensitive(False)
+        set_busy(self.send, True)
         self.rate.set_text("Thinking… (the first answer loads the model into memory)")
 
         def done(r):
             content, rate = r
             bubble.set_text(content.strip() or "(no answer)")
             self.messages.append({"role": "assistant", "content": content})
-            self.send.set_sensitive(True)
+            set_busy(self.send, False)
             self.rate.set_text(rate)
 
         def fail(e):
             bubble.set_text(f"Error: {e}")
-            self.send.set_sensitive(True)
+            set_busy(self.send, False)
             self.rate.set_text("")
         bg(chat, self.store.engine, it.get_string(), list(self.messages), done=done, error=fail)
 

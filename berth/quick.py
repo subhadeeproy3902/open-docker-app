@@ -5,6 +5,7 @@ import re
 from gi.repository import Adw, Gtk
 
 from .util import bg, cname, label
+from .util import set_busy  # noqa: E402
 
 
 def _ask(win, heading, body, initial, ok, then, check=None, keep_ok=False):
@@ -169,7 +170,7 @@ class PortsDialog(Adw.Dialog):
     def _apply(self):
         from .edit import change_ports
         ports = self._ports()
-        self.ok.set_sensitive(False)
+        set_busy(self.ok, True)
         self.win.toast("Recreating the container with the new ports…")
 
         def done(new_id):
@@ -178,7 +179,7 @@ class PortsDialog(Adw.Dialog):
             self.close()
 
         def fail(e):
-            self.ok.set_sensitive(True)
+            set_busy(self.ok, False)
             self.win.toast(f"Ports not changed (the old container is back): {e}")
         bg(change_ports, self.store.engine, self.cid, ports, done=done, error=fail)
 

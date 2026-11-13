@@ -5,6 +5,23 @@ and the project uses [Semantic Versioning](https://semver.org/).
 
 ## [Unreleased]
 
+### Added
+- **Safe updates** (Settings → Image updates, off by default): before an image update, Berth scans the current and the
+  new version with Trivy. If the new one brings critical or high vulnerabilities the current one doesn't have, Berth
+  keeps the current version under its name, removes the new download and tells you why; containers are not touched.
+- **Scan history**: every scan is remembered (last 10 per image); the scan window compares with the previous one.
+- **Security column** on the Images page: the last scan's result for each image (critical, high or clean).
+- **Scheduled scans** (Settings → Image updates): scan every image a container uses each day or week, with a
+  notification when something critical or high turns up.
+- **Alerts** (Settings → Alerts, #15): a desktop notification when a container stays above a CPU limit for 5 minutes,
+  passes a share of its memory limit, or when Docker's disk runs low. Checked once a minute, only while an alert is on.
+- The daily "newer image version" check now also runs while the Images page is closed, with a notification.
+- App stores: brand colours in the metainfo; the menu entry lists one main category (Development).
+
+### Changed
+- Flatpak builds on the GNOME 51 runtime (was 48). A Flathub-ready manifest that builds a pinned release tag is in
+  `packaging/flatpak/flathub/`. The AUR PKGBUILD has the real checksum and a `.SRCINFO`.
+
 ## [1.3.0] - 2026-11-13
 
 The biggest release so far: Berth now reaches into your databases, shares what you run, backs it up, and works the

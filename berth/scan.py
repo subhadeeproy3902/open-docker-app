@@ -1,6 +1,8 @@
 """Image vulnerability scan with Trivy (open source, run as a container — nothing installed on the host).
 The vulnerability database is cached in the volume `berth-trivy-cache` so later scans are quick."""
 import json
+import os
+import time
 
 from gi.repository import Adw, Gio, GLib, Gtk, Pango
 
@@ -11,6 +13,43 @@ CACHE = "berth-trivy-cache"
 SEV = ["CRITICAL", "HIGH", "MEDIUM", "LOW", "UNKNOWN"]
 SEV_COL = {"CRITICAL": "#c01c28", "HIGH": "#e66100", "MEDIUM": "#c88800", "LOW": "#3584e4", "UNKNOWN": "#77767b"}
 HELPER_LABEL = "io.github.subhadeeproy3902.berth.helper"
+HISTORY = os.path.join(GLib.get_user_state_dir(), "berth", "scans.json")
+
+
+def counts(vulns):
+    c = {s: 0 for s in SEV}
+    for v in vulns:
+        c[v["sev"] if v["sev"] in c else "UNKNOWN"] += 1
+    return c
+
+
+def serious(vulns):
+    """The critical and high findings, as comparable keys (same CVE in the same package)."""
+    return {(v["id"], v["pkg"]) for v in vulns if v["sev"] in ("CRITICAL", "HIGH")}
+
+
+def _load_history():
+    try:
+        with open(HISTORY) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def history(ref):
+    """Past scans of a tag, oldest first: [{"t": time, "id": image id, "c": {severity: count}}]."""
+    return _load_history().get(ref, [])
+
+
+def _record(ref, image_id, vulns):
+    h = _load_history()
+    h[ref] = (h.get(ref, []) + [{"t": time.time(), "id": image_id, "c": counts(vulns)}])[-10:]
+    try:
+        os.makedirs(os.path.dirname(HISTORY), exist_ok=True)
+        with open(HISTORY, "w") as f:
+            json.dump(h, f)
+    except OSError:
+        pass
 
 
 def _daemon_side_socket(sock):
@@ -56,7 +95,9 @@ def run_scan(engine, ref, sock):
                           "title": v.get("Title") or (v.get("Description") or "")[:140], "url": v.get("PrimaryURL", ""),
                           "target": r.get("Target", ""), "type": r.get("Type", ""),
                           "path": v.get("PkgPath", "")})
-    return data.get("Metadata") or {}, vulns
+    meta = data.get("Metadata") or {}
+    _record(ref, meta.get("ImageID", ""), vulns)
+    return meta, vulns
 
 
 class ScanDialog(Adw.Dialog):
@@ -98,6 +139,8 @@ class ScanDialog(Adw.Dialog):
 
     def _show(self, res):
         meta, vulns = res
+        if "images" in getattr(self.win, "pages", {}):
+            self.win.pages["images"]._fill()          # the Security column shows the new result
         self.rescan.set_sensitive(True)
         self.vulns = vulns
         self.filter = Gtk.CustomFilter.new(self._keep, None)
@@ -123,6 +166,12 @@ class ScanDialog(Adw.Dialog):
         os_info = (meta.get("OS") or {})
         summary = f"{len(vulns)} vulnerabilities" + (f" · {os_info.get('Family', '')} {os_info.get('Name', '')}" if os_info else "")
         fixable = sum(1 for v in vulns if v["fixed"])
+        past = history(self.ref)
+        if len(past) > 1:
+            p = past[-2]
+            summary += (f" · previous scan {time.strftime('%d %b %H:%M', time.localtime(p['t']))}: "
+                        f"{p['c'].get('CRITICAL', 0)} critical, {p['c'].get('HIGH', 0)} high"
+                        + (" (a different version)" if p["id"] and p["id"] != meta.get("ImageID") else ""))
         box.append(Gtk.Label(label=f"{summary} · {fixable} have a fix available", xalign=0, margin_start=16,
                              css_classes=["dim-label", "caption"]))
         if not vulns:

@@ -183,6 +183,8 @@ class Window(Adw.ApplicationWindow):
                 "python3-gobject-cairo (openSUSE)") and False)
         GLib.timeout_add_seconds(60, lambda: self._run_backups() and False)   # catch up shortly after start
         GLib.timeout_add_seconds(600, self._run_backups)
+        self._watch_busy, self._last_img_check = set(), 0
+        GLib.timeout_add_seconds(60, self._watch)                              # alerts, update check, scheduled scans
         # Responsive layout: one size class at a time (sm … 3xl). Each class is a breakpoint whose "apply" tells every
         # page; pages pick their own column counts, and style.css scales spacing and type per class. The ranges are in
         # sp, so a larger text size behaves like a smaller screen (accessibility first).
@@ -438,6 +440,49 @@ class Window(Adw.ApplicationWindow):
             if "backups" in self.pages:
                 self.pages["backups"].refresh()
         bg(backups.run_due, self.store.engine, sch, done=done, error=lambda e: None)
+        return True
+
+    def _watch(self):
+        """Once a minute: resource alerts (only when one is on), the daily image-update check (also while the Images
+        page is closed) and scheduled vulnerability scans. See watch.py."""
+        import time
+        from . import watch
+        from .util import bg
+        s, st = self.settings, self.store
+        if not st.up:
+            return True
+        now = time.time()
+        if "images" in self.pages and now - self._last_img_check > 3600:
+            if st.images is None:
+                st.refresh("images")                       # loaded by the next tick
+            else:
+                self._last_img_check = now
+                self.pages["images"]._daily_check()
+        if (s["alert_cpu"] or s["alert_mem"] or s["alert_disk"]) and "alerts" not in self._watch_busy:
+            if not hasattr(self, "alerts"):
+                self.alerts = watch.Alerts()
+            self._watch_busy.add("alerts")
+
+            def shown(res):
+                self._watch_busy.discard("alerts")
+                for key, title, body in res:
+                    self.notify(title, body, key=key)
+            bg(self.alerts.check, st.engine, list(st.containers or []), dict(st.info or {}), s["alert_cpu"],
+               s["alert_mem"], s["alert_disk"], done=shown, error=lambda e: self._watch_busy.discard("alerts"))
+        if watch.scan_due(s["scan_schedule"], s["scan_last"]) and st.images and "scan" not in self._watch_busy:
+            self._watch_busy.add("scan")
+            s["scan_last"] = now
+
+            def scanned(res):
+                self._watch_busy.discard("scan")
+                bad = [f"{r} ({c} critical, {h} high)" for r, c, h in res if c or h]
+                self.notify("Scheduled scan: " + (f"{len(bad)} of {len(res)} images need attention" if bad else
+                                                  f"{len(res)} images, nothing critical or high"),
+                            ", ".join(bad[:4]) + (" …" if len(bad) > 4 else ""), key="scheduled-scan")
+                if "images" in self.pages:
+                    self.pages["images"]._fill()
+            bg(watch.scan_in_use, st.engine, list(st.images), list(st.containers or []), done=scanned,
+               error=lambda e: self._watch_busy.discard("scan"))
         return True
 
     # ── resource saver: sample only while someone can see the numbers ──

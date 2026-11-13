@@ -10,7 +10,7 @@ from gi.repository import Adw, Gio, GLib, Gtk, Pango
 from . import charts
 from .cli import CommandDialog, run_capture
 from .files import FileBrowser, clone_volume, export_volume, import_volume, start_volume_helper, stop_volume_helper
-from .scan import ScanDialog
+from .scan import ScanDialog, run_scan, serious
 from .util import (follow_content, release_on_leave, Row, ago, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
                    fmt_rate, icon_button, label, labels, ordering, thread, detail_tag, push_detail, WidePrefs,
                    toolbar_row, PageHeader, flat_page, table_card)
@@ -379,7 +379,7 @@ class ImagesPage(TablePage):
     empty_text = ("No images", "Pull one from Docker Hub with the Pull button.")
 
     def __init__(self, win, store, settings):
-        self.updates = _load_updates()
+        self.updates, self._scans = _load_updates(), {}
         super().__init__(win, store, settings)
         store.connect("images", lambda *_: self._fill())
         store.connect("containers", lambda *_: self._fill() if store.images is not None else None)
@@ -443,6 +443,21 @@ class ImagesPage(TablePage):
             w.set_tooltip_text("\n".join(used) if used else None)
         self.widget_column("Status", status_setup, status_upd, width=100)
 
+        def vuln_upd(w, r):
+            last = next((h for h in reversed(self._scans.get(r.data["ref"], [])) if h["id"] == r.data["id"]), None)
+            if not last:
+                w.set_text("—")
+                w.set_css_classes(["status-pill", "muted"])
+                w.set_tooltip_text("Not scanned yet — ⋮ → Open details → Scan")
+                return
+            c = last["c"]
+            crit, high = c.get("CRITICAL", 0), c.get("HIGH", 0)
+            w.set_text(f"{crit} critical" if crit else f"{high} high" if high else "Clean")
+            w.set_css_classes(["status-pill", "bad" if crit else "warn" if high else "ok"])
+            w.set_tooltip_text(f"Scanned {time.strftime('%d %b %H:%M', time.localtime(last['t']))}: "
+                               + (", ".join(f"{v} {k.lower()}" for k, v in c.items() if v) or "nothing found"))
+        self.widget_column("Security", status_setup, vuln_upd, width=100)
+
         def act_setup():
             box = Gtk.Box(spacing=2, halign=Gtk.Align.END)
             box.run = icon_button("media-playback-start-symbolic", "Run")
@@ -480,6 +495,8 @@ class ImagesPage(TablePage):
         return q in row.data["repo"].lower() or q in row.data["tag"].lower() or q in row.data["id"]
 
     def _fill(self):
+        from .scan import _load_history
+        self._scans = _load_history()
         imgs = self.store.images
         if imgs is None:
             return
@@ -526,7 +543,10 @@ class ImagesPage(TablePage):
             self.upd_btn.set_label("Check for updates")
             n = sum(1 for k, v in res.items() if v is True)
             unknown = sum(1 for k, v in res.items() if v is None and not k.startswith("_"))
-            if not quiet or n:
+            if quiet and n:                      # background check: a desktop notification when Berth is hidden
+                self.win.notify("Image updates", f"{n} image{'s have' if n != 1 else ' has'} a newer version — "
+                                "Images → Update all", key="image-updates")
+            elif not quiet:
                 self.win.toast(f"{n} image{'s have' if n != 1 else ' has'} a newer version" if n else
                                "Every pulled image is up to date" + (f" ({unknown} built here or not checkable)"
                                                                      if unknown else ""))
@@ -550,7 +570,7 @@ class ImagesPage(TablePage):
         names = ", ".join(cname(c) for c in users[:8]) + (f" and {len(users) - 8} more" if len(users) > 8 else "")
         body = (f"Berth pulls the newest <b>{esc(d['ref'])}</b>" +
                 (f", then recreates {esc(names)} with it — same settings, ports, volumes and networks. Running "
-                 "ones restart, which takes a few seconds." if users else ". No container uses it."))
+                 "ones restart, which takes a few seconds." if users else ". No container uses it.") + self._safe_note())
         confirm(self.win, f"Update {d['ref']}?", body, "Update", lambda: self._do_update([(d["ref"], users)]))
 
     def _update_all(self):
@@ -562,7 +582,12 @@ class ImagesPage(TablePage):
             return
         n = sum(len(u) for _r, u in todo)
         confirm(self.win, f"Update {len(todo)} images?", f"Each newer version is pulled; {n} containers that use "
-                "them are recreated with the same settings.", "Update all", lambda: self._do_update(todo))
+                "them are recreated with the same settings." + self._safe_note(), "Update all", lambda: self._do_update(todo))
+
+    def _safe_note(self):
+        return ("\n\nSafe updates: each new version is scanned first. If it brings critical or high "
+                "vulnerabilities the current one doesn't have, Berth keeps the current version."
+                if self.win.settings["safe_update"] else "")
 
     def _rows_now(self):
         return [self.model.get_item(i) for i in range(self.model.get_n_items())]
@@ -572,9 +597,19 @@ class ImagesPage(TablePage):
         e = self.store.engine
         self.win.toast(f"Updating {len(todo)} image{'s' if len(todo) > 1 else ''}…")
 
+        safe = bool(self.win.settings["safe_update"])
+
         def work():
-            msgs = []
+            msgs, kept = [], []
             for ref, users in todo:
+                if safe:                         # scan what runs now, so only *new* problems block the update
+                    try:
+                        old_id = e.image_inspect(ref)["Id"]
+                        _m, before = run_scan(e, ref, e.path)
+                    except Exception as ex:
+                        msgs.append(f"{ref}: couldn't scan the current version ({ex}), not updated")
+                        kept.append(ref)
+                        continue
                 st = e.pull(ref)
                 try:
                     tail = b""
@@ -586,6 +621,25 @@ class ImagesPage(TablePage):
                 if b'"error"' in tail:
                     msgs.append(f"{ref}: pull failed")
                     continue
+                if safe:
+                    try:
+                        new_id = e.image_inspect(ref)["Id"]
+                        added = set() if new_id == old_id else serious(run_scan(e, ref, e.path)[1]) - serious(before)
+                    except Exception as ex:
+                        added, new_id = {("scan failed", str(ex))}, None
+                    if added:                    # put the old version back under its name; drop the new one
+                        repo, tag = ref.rsplit(":", 1)
+                        try:
+                            e.tag(old_id, repo, tag)
+                            if new_id and new_id != old_id:
+                                e.remove_image(new_id)
+                        except Exception:  # noqa: BLE001
+                            pass
+                        why = (f"the new version adds {len(added)} critical or high vulnerabilities"
+                               if new_id else "the new version couldn't be scanned")
+                        msgs.append(f"{ref}: kept the current version, {why}")
+                        kept.append(ref)
+                        continue
                 for c in users:
                     if c.get("Labels", {}).get("com.docker.compose.project"):
                         pass                     # Compose containers keep their labels, so Compose still owns them
@@ -593,15 +647,22 @@ class ImagesPage(TablePage):
                         recreate_same(e, c["Id"])
                     except Exception as ex:
                         msgs.append(f"{cname(c)}: {ex}")
-            return msgs
+            return msgs, kept
 
-        def done(msgs):
+        def done(res):
+            msgs, kept = res
             for ref, _u in todo:
-                self.updates[ref] = False
+                if ref not in kept:
+                    self.updates[ref] = False
             _save_updates(self.updates)
             self.store.refresh("images")
             self.store.refresh("containers")
-            self.win.toast("Updated" + (f" — {msgs[0][:140]}" if msgs else ""))
+            n = len(todo) - len(kept)
+            head = (f"Updated {n}, kept {len(kept)}" if kept and n else "Kept the current version" if kept else "Updated")
+            if kept:                             # a toast when Berth is in front, else a desktop notification
+                self.win.notify(head, "\n".join(msgs[:4]), key="safe-update")
+            else:
+                self.win.toast(head + (f" — {msgs[0][:140]}" if msgs else ""))
         bg(work, done=done, error=lambda ex: self.win.toast(f"Update failed: {ex}"))
 
     def _delete(self, row):

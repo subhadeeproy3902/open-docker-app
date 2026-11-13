@@ -189,7 +189,9 @@ class Settings:
                 "software": False, "range": 600, "page": "containers", "tray": False, "engine": "",
                 "text_scale": 100, "density": "comfortable", "strong_borders": False, "reduce_motion": False,
                 "large_icons": False, "db_history": {}, "routes": [], "proxy_ports": [80, 443],
-                "send_port": 8787, "backups": [], "notify": True, "update_check": True, "update_skip": "", "stacks": []}
+                "send_port": 8787, "backups": [], "notify": True, "update_check": True, "update_skip": "", "stacks": [],
+                "safe_update": False, "alert_cpu": 0, "alert_mem": 0, "alert_disk": 0,
+                "scan_schedule": "off", "scan_last": 0}
 
     def __init__(self):
         self.path = os.path.join(GLib.get_user_config_dir(), "berth", "settings.json")

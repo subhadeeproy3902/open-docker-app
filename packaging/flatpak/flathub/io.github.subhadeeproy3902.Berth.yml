@@ -1,0 +1,32 @@
+# Flathub submission copy: same as ../io.github.subhadeeproy3902.Berth.yml, but builds a pinned release tag.
+# On each release: update tag + commit (x-checker-data lets Flathub's bot do it automatically).
+id: io.github.subhadeeproy3902.Berth
+runtime: org.gnome.Platform
+runtime-version: '51'
+sdk: org.gnome.Sdk
+command: berth
+finish-args:
+  - --share=ipc
+  - --share=network
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  - --filesystem=/run/docker.sock
+  - --filesystem=xdg-run/docker.sock
+  - --filesystem=xdg-run/podman
+  - --filesystem=home
+  - --talk-name=org.freedesktop.Flatpak
+  - --talk-name=org.kde.StatusNotifierWatcher
+modules:
+  - name: berth
+    buildsystem: simple
+    build-commands:
+      - make install PREFIX=/app ICON=io.github.subhadeeproy3902.Berth
+    sources:
+      - type: git
+        url: https://github.com/subhadeeproy3902/open-docker-app.git
+        tag: v1.3.0
+        commit: 1b6665ebfdc95822b28fb4cfea25363373bc29e9
+        x-checker-data:
+          type: git
+          tag-pattern: ^v([\d.]+)$

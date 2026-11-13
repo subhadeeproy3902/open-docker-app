@@ -488,7 +488,8 @@ class Window(Adw.ApplicationWindow):
     # ── resource saver: sample only while someone can see the numbers ──
     def update_saver(self):
         visible = self.get_visible() and not self.get_property("suspended")
-        focused = self.is_active() or not self.settings["saver"]
+        focused = (any(w.is_active() for w in self.get_application().get_windows())   # also a detached detail
+                   if self.get_application() else self.is_active()) or not self.settings["saver"]
         want = bool(self.store.up and visible and focused)
         self.store.want_stats(want)
         self.sb_saver.set_text("" if want or not self.store.up else

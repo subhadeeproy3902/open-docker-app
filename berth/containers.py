@@ -15,7 +15,7 @@ from .engine import demux
 from .files import FileBrowser
 from .logs import LogsExplorer
 from .util import (release_on_leave, Row, bg, cname, confirm, connect_row, disconnect_rows, esc, factory, fmt_bytes, fmt_pct,
-                   fmt_rate, icon_button, label, labels, open_uri, short_status, spawn, state_of,
+                   fmt_rate, icon_button, label, labels, open_uri, short_status, status_tooltip, exit_code, spawn, state_of,
                    terminal_argv, themed, thread, detail_tag, push_detail, toolbar_row,
                    run_in_terminal, PageHeader, flat_page, table_card, WidePrefs)
 
@@ -555,8 +555,13 @@ class ContainersPage(Gtk.Box):
         self.col_image = col("Image", lambda: TextCell(["monospace", "dim-label"]),
             lambda w, r, _t: (w.set_text(r.data.get("Image", "") if r.kind == "container" else ""),
                               w.set_tooltip_text(r.data.get("Image") if r.kind == "container" else None)), expand=True)
-        col("Status", lambda: TextCell(["dim-label"]),
-            lambda w, r, _t: w.set_text(short_status(r.data.get("Status", "")) if r.kind == "container" else ""), width=132)
+        def status_bind(w, r, _t):
+            st = r.data.get("Status", "") if r.kind == "container" else ""
+            w.set_text(short_status(st) if st else "")
+            w.set_tooltip_text(status_tooltip(st) if st else None)
+            code = exit_code(st)
+            w.set_css_classes(["warn-text"] if code not in (None, 0, 143) else ["dim-label"])
+        col("Status", lambda: TextCell(["dim-label"]), status_bind)      # sized to its text: never cut off (#9)
         self.col_ports = col("Ports", lambda: PortsCell(self.actions), lambda w, r, _t: w.update(r), width=118)
 
         def stat_col(title, idx):
@@ -884,16 +889,18 @@ class ContainersPage(Gtk.Box):
 
 # ── detail page ──
 class ContainerDetail(Adw.NavigationPage):
-    def __init__(self, page, cid):
+    """embedded: a pane of the split view or a separate window — no back button; its own window controls only in a
+    separate window (window=True)."""
+
+    def __init__(self, page, cid, embedded=False, window=False):
         c = page.store.by_id(cid) or {"Id": cid, "Names": [cid[:12]], "State": "unknown"}
         super().__init__(title=cname(c), tag=detail_tag("detail"))
         self.page, self.store, self.cid, self.actions = page, page.store, cid, page.actions
+        self.embedded, self.on_gone = embedded, None
         self.built = set()
         tv = Adw.ToolbarView()
-        hb = Adw.HeaderBar()
         self.tabs = Adw.ViewStack()
-        self.wtitle = Adw.WindowTitle(title=cname(c))
-        hb.set_title_widget(self.wtitle)
+        self.wtitle = PageHeader(cname(c))
         self.btn_main = icon_button("media-playback-stop-symbolic", "Stop", self._main)
         self.btn_restart = icon_button("view-refresh-symbolic", "Restart", lambda: self.actions.verb(cid, "restart"))
         self.btn_pause = icon_button("media-playback-pause-symbolic", "Pause", self._pause)
@@ -921,21 +928,33 @@ class ContainerDetail(Adw.NavigationPage):
             a = Gio.SimpleAction.new(n, None)
             a.connect("activate", lambda *_a, f=fn: f(self.cid))
             dag.add_action(a)
+        # several at once (#22): this container in its own window, or side by side with another one
+        if not embedded:
+            more.append("Open in a new window", "det.window")
+            self.split_menu = Gio.Menu()
+            more.append_submenu("Split view with", self.split_menu)
+            a = Gio.SimpleAction.new("window", None)
+            a.connect("activate", lambda *_: open_window(page, self.cid, self.tabs.get_visible_child_name()))
+            dag.add_action(a)
+            a = Gio.SimpleAction.new("split", GLib.VariantType.new("s"))
+            a.connect("activate", lambda _a, v: open_split(page, self.cid, v.get_string()))
+            dag.add_action(a)
         self.insert_action_group("det", dag)
-        for b in (self.btn_more, self.btn_delete, self.btn_port, self.btn_pause, self.btn_restart, self.btn_main, self.btn_edit):
-            hb.pack_end(b)
-        tv.set_top_bar_style(Adw.ToolbarStyle.FLAT)
-        tv.add_top_bar(hb)
-        self.sub = label(css=["dim-label", "caption"], hexpand=True)
+        for b in (self.btn_edit, self.btn_main, self.btn_restart, self.btn_pause, self.btn_port, self.btn_delete,
+                  self.btn_more):
+            self.wtitle.add(b)
         tabbar = Gtk.Box(spacing=12, css_classes=["explorer-bar"])
-        tabbar.append(Adw.InlineViewSwitcher(stack=self.tabs, display_mode=Adw.InlineViewSwitcherDisplayMode.BOTH))
-        tabbar.append(self.sub)
-        self.sub.set_xalign(1.0)
-        content = Gtk.Box(orientation=Gtk.Orientation.VERTICAL)
-        content.append(tabbar)
-        content.append(self.tabs)
+        tabbar.append(Adw.InlineViewSwitcher(stack=self.tabs, display_mode=Adw.InlineViewSwitcherDisplayMode.ICONS
+                                             if embedded and not window else Adw.InlineViewSwitcherDisplayMode.BOTH))
+        hb = flat_page(tv, self.wtitle, tabbar)
+        if embedded:
+            hb.set_show_back_button(False)
+            hb.set_show_start_title_buttons(window)
+            hb.set_show_end_title_buttons(window)
+            if not window:
+                hb.set_visible(False)
         self.tabs.set_vexpand(True)
-        tv.set_content(content)
+        tv.set_content(self.tabs)
         self.set_child(tv)
 
         self.logs = LogsExplorer(page.win, self.store, lambda: [(self.cid, cname(self.c or c), False)])
@@ -982,7 +1001,10 @@ class ContainerDetail(Adw.NavigationPage):
         self.set_child(None)                  # release the whole widget tree, cycles and all
 
     def _gone(self):
-        self.page.nav.pop_to_tag("list")
+        if self.on_gone:
+            self.on_gone()
+        else:
+            self.page.nav.pop_to_tag("list")
 
     @property
     def c(self):
@@ -995,8 +1017,15 @@ class ContainerDetail(Adw.NavigationPage):
         st = c["State"]
         self.set_title(cname(c))
         self.wtitle.set_title(cname(c))
-        self.sub.set_text(f"{c.get('Image', '')} · {short_status(c.get('Status', ''))}"
-                          + (f" · {project(c)}" if project(c) else ""))
+        self.wtitle.set_subtitle(" · ".join(x for x in (c.get("Image", ""), short_status(c.get("Status", "")),
+                                                        project(c) and f"stack {project(c)}") if x))
+        self.wtitle.set_tooltip_text(c.get("Status", ""))
+        if getattr(self, "split_menu", None) is not None:
+            self.split_menu.remove_all()
+            others = [o for o in self.store.containers if o["Id"] != self.cid]
+            others.sort(key=lambda o: (o.get("State") != "running", cname(o)))
+            for o in others[:30]:
+                self.split_menu.append(cname(o), f"det.split::{o['Id']}")
         stopped = st not in ("running", "paused", "restarting")
         self.btn_main.set_icon_name("media-playback-start-symbolic" if stopped else "media-playback-stop-symbolic")
         self.btn_main.set_tooltip_text("Start" if stopped else "Stop")
@@ -1033,6 +1062,9 @@ class ContainerDetail(Adw.NavigationPage):
             new = builder()
             new.set_vexpand(True)
             new.set_hexpand(True)
+            if name in ("exec", "files"):          # tables and terminals sit in a card, inside the page margins
+                new = table_card(new)
+                new.add_css_class("detail-card")
             child.append(new)
         self.page.win.update_saver()
 
@@ -1167,7 +1199,7 @@ class ContainerDetail(Adw.NavigationPage):
                                       description="Start it to open a shell.", vexpand=True))
             return box
         if Vte is not None:
-            term = Vte.Terminal(vexpand=True, hexpand=True, margin_start=10, margin_end=4, margin_top=6)
+            term = Vte.Terminal(vexpand=True, hexpand=True, margin_start=10, margin_end=4, margin_top=6, margin_bottom=6)
             term.set_scrollback_lines(5000)
             term.set_cursor_blink_mode(Vte.CursorBlinkMode.OFF)
             term.set_clear_background(False)            # use the window background → follows light/dark
@@ -1253,7 +1285,7 @@ class ContainerDetail(Adw.NavigationPage):
     # stats
     def _build_stats(self):
         pal = charts.palette()
-        grid = Gtk.Grid(column_spacing=12, row_spacing=12, margin_start=14, margin_end=14, margin_top=12, margin_bottom=14,
+        grid = Gtk.Grid(column_spacing=12, row_spacing=12, css_classes=["page-body"],
                         column_homogeneous=True)
         self.ch_cpu = charts.LineChart(fmt_pct, 160, fill=True)
         self.ch_mem = charts.LineChart(fmt_bytes, 160, binary=True, fill=True)
@@ -1295,3 +1327,79 @@ class ContainerDetail(Adw.NavigationPage):
             self.tiles["mem"].set_text(fmt_bytes(p[2]))
             self.tiles["net"].set_text(f"↓ {fmt_rate(p[3])}  ↑ {fmt_rate(p[4])}")
             self.tiles["io"].set_text(f"r {fmt_rate(p[5])}  w {fmt_rate(p[6])}")
+
+
+# ── several containers at once (#22) ──
+def open_window(page, cid, tab=None):
+    """This container's details in a window of its own. Its logs and stats stream only while it is on screen, like
+    the main window; closing the window stops them."""
+    win = Adw.Window(application=page.win.get_application(), default_width=980, default_height=680)
+    for c in page.win.get_css_classes():          # same density, borders, icon size as the main window
+        if c.startswith(("density-", "strong-", "large-", "reduce-", "size-")):
+            win.add_css_class(c)
+    nav = Adw.NavigationView()
+    det = ContainerDetail(page, cid, embedded=True, window=True)
+    det.on_gone = win.close
+    nav.add(det)
+    win.set_content(nav)
+    win.set_title(det.get_title())
+    if tab:
+        det.tabs.set_visible_child_name(tab)
+    win.connect("notify::is-active", lambda *_: page.win.update_saver())
+    win.connect("close-request", lambda *_: (det._disconnect(), page.win.update_saver(), False)[-1])
+    win.present()
+    return win
+
+
+class SplitView(Adw.NavigationPage):
+    """Two containers side by side in the main window, each with all its tabs."""
+
+    def __init__(self, page, left, right):
+        names = [cname(page.store.by_id(x) or {"Names": [x[:12]]}) for x in (left, right)]
+        super().__init__(title=f"{names[0]} · {names[1]}", tag=detail_tag("split"))
+        self.page = page
+        tv = Adw.ToolbarView()
+        head = PageHeader("Split view", f"{names[0]} and {names[1]}")
+        swap = Gtk.Button(label="Swap", tooltip_text="Swap the two sides")
+        head.add(swap)
+        flat_page(tv, head)
+        self.paned = Gtk.Paned(orientation=Gtk.Orientation.HORIZONTAL, wide_handle=True, vexpand=True,
+                               shrink_start_child=False, shrink_end_child=False)
+        self.panes = []
+        for cid, setter in ((left, self.paned.set_start_child), (right, self.paned.set_end_child)):
+            setter(self._pane(cid))
+        swap.connect("clicked", lambda *_: self._swap())
+        tv.set_content(self.paned)
+        self.set_child(tv)
+        self.connect("realize", lambda *_: GLib.idle_add(self._half))
+        release_on_leave(self, self._release)
+
+    def _pane(self, cid):
+        nav = Adw.NavigationView(hexpand=True, width_request=420)
+        det = ContainerDetail(self.page, cid, embedded=True)
+        det.on_gone = lambda: self.page.nav.pop_to_tag("list")
+        nav.add(det)
+        self.panes.append(det)
+        return nav
+
+    def _half(self):
+        w = self.paned.get_width()
+        if w > 0:
+            self.paned.set_position(w // 2)
+        return False
+
+    def _swap(self):
+        a, b = self.paned.get_start_child(), self.paned.get_end_child()
+        self.paned.set_start_child(None)
+        self.paned.set_end_child(None)
+        self.paned.set_start_child(b)
+        self.paned.set_end_child(a)
+
+    def _release(self):
+        for d in self.panes:
+            d._disconnect()
+        self.panes = []
+
+
+def open_split(page, left, right):
+    push_detail(page.nav, SplitView(page, left, right))

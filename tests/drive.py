@@ -149,6 +149,8 @@ def scenario(app):
         vis.tabs.set_visible_child_name("files")
         yield 2
         fb = vis.tabs.get_child_by_name("files").get_first_child()
+        while fb is not None and type(fb).__name__ != "FileBrowser":      # it sits inside a card (1.4)
+            fb = fb.get_first_child()
         check("Files tab built", fb is not None and type(fb).__name__ == "FileBrowser", type(fb).__name__)
         fb.load("/tmp")
         yield 2

@@ -54,6 +54,13 @@ and the project uses [Semantic Versioning](https://semver.org/).
   listening ports, /metrics or /actuator/prometheus), scrapes it every 5 s while the tab is open, and charts it —
   counters as a rate per second. Starter charts for node, Postgres, Redis, nginx, Node.js, Python, Go and Java
   exporters; any other series can be added.
+- **Databases outside Docker** (Databases → Connect…): a connection string for PostgreSQL, MySQL / MariaDB, Redis /
+  Valkey or MongoDB, on this computer or in the cloud, opens the same explorer. Berth runs the database's own client in
+  a short-lived container (removed when you close it); recent connections are remembered without their password.
+- **Query tabs and saved queries**: several queries side by side, each with its own result; save a query under a
+  name per database; Run uses only the selected text when something is selected.
+- **Schema editing** (PostgreSQL, MySQL / MariaDB — Structure view): new table, add / rename / drop a column, add an
+  index. Each dialog shows the exact SQL first and runs it only with "Allow changes" on.
 
 ### Changed
 - Flatpak builds on the GNOME 51 runtime (was 48). A Flathub-ready manifest that builds a pinned release tag is in

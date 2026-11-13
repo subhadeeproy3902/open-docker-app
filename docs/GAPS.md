@@ -35,17 +35,17 @@ all of them).
 
 - [x] **P1** Inline editing in the grid (double-click a cell), multi-select rows (Ctrl/Shift+click), delete or copy several at once
 - [ ] **P1** Exact row count and "go to page"; choose page size (50 / 200 / 1,000)
-- [ ] **P2** SQL editor: run only the selection, cancel a running query, several query tabs, saved queries.
+- [x] **P2** SQL editor: run only the selection, several query tabs, saved queries (cancelling a running query: still open).
       (Highlighting and autocomplete: dropped for now — they would need GtkSourceView, an extra library to bundle
       on macOS and Windows.)
 - [x] **P1** Export a whole table (all pages) to CSV / JSON; import CSV / JSON into a table (add or replace, all or nothing)
 - [x] **P1** Backups: dump and restore a database (pg_dump / mysqldump / mongodump / Redis RDB), on demand and on a
       schedule, to a folder — the Backups page
-- [ ] **P2** Schema editing: create table, add / rename / drop column, indexes, foreign keys
+- [x] **P2** Schema editing: create table, add / rename / drop column, indexes (foreign keys: still open)
 - [ ] **P2** Follow a foreign key to the row it points to; show the referenced row in the panel
 - [ ] **P2** Show / hide / reorder columns; type shown in the column header
 - [ ] **P2** SQLite: editing (today it opens a read-only copy)
-- [ ] **P2** Databases outside Docker (connection string: localhost, a cloud database)
+- [x] **P2** Databases outside Docker (connection string: localhost, a cloud database)
 - [ ] **P2** Create / delete databases; users, roles and grants
 - [ ] **P2** Activity: running queries with "stop", table sizes, slow queries
 - [ ] **P3** Undo the last change; a log of the changes made from Berth

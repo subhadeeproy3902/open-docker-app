@@ -82,7 +82,7 @@ all of them).
 - [x] **P1** Volume backups on a schedule, and restore
 - [ ] **P2** Connect / disconnect containers to a network from the network or the container page
 - [ ] **P2** Create networks and volumes with options (subnet, driver, NFS)
-- [ ] **P3** A map of which containers share which networks
+- [x] **P3** A map of which containers share which networks, with a reachability check
 
 ## Compose and stacks
 
@@ -90,7 +90,7 @@ all of them).
 - [x] **P1** Check a Compose file before running it (errors, unset variables, port clashes, names, build folders, env files)
 - [x] **P2** Templates: one-click stacks (13 in berth/templates/) and Dockerize a folder
 - [ ] **P2** Deploy a stack from a Git repository and redeploy on changes
-- [ ] **P3** Edit `.env` files with validation
+- [x] **P3** Edit `.env` files with validation (Stacks → Environment and secrets)
 
 ## Sharing and Send files
 

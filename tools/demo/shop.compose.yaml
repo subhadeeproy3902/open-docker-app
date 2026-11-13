@@ -4,18 +4,37 @@ services:
     image: nginx:alpine
     ports: ["8080:80"]
     depends_on: [api]
+    networks: [front]
   api:
     image: busybox:latest
-    command: ["sh", "-c", "i=0; while true; do i=$$((i+1)); r=$$((RANDOM % 20)); if [ $$r -eq 0 ]; then echo \"ERROR payment gateway timeout order=$$i\"; elif [ $$r -lt 3 ]; then echo \"WARN slow query 812ms route=/cart\"; else echo \"INFO GET /products 200 $$((r*7))ms\"; fi; sleep 0.$$((r % 9 + 1)); done"]
+    environment:
+      DB_HOST: db
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      PAYMENT_API_KEY: demo-key-123
+    env_file: [shop.env]
+    depends_on:
+      db: {condition: service_healthy}
+      cache: {condition: service_started}
+    networks: [front, back]
+    command: ["sh", "-c", "mkdir -p /www && echo ok > /www/index.html && httpd -p 8000 -h /www; i=0; while true; do i=$$((i+1)); r=$$((RANDOM % 20)); if [ $$r -eq 0 ]; then echo \"ERROR payment gateway timeout order=$$i\"; elif [ $$r -lt 3 ]; then echo \"WARN slow query 812ms route=/cart\"; else echo \"INFO GET /products 200 $$((r*7))ms\"; fi; sleep 0.$$((r % 9 + 1)); done"]
     ports: ["8000:8000"]
   worker:
     image: busybox:latest
+    environment:
+      DB_HOST: db-primary
+      LOG_LEVEL: debug
+    depends_on: [db, cache]
+    networks: [back]
     command: ["sh", "-c", "while true; do echo \"INFO processed job $$RANDOM\"; [ $$((RANDOM % 15)) -eq 0 ] && echo \"WARN retrying email delivery\"; sleep 1; done"]
   db:
     image: postgres:16-alpine
     environment: {POSTGRES_PASSWORD: demo, POSTGRES_DB: shop}
     volumes: ["pgdata:/var/lib/postgresql/data"]
+    healthcheck: {test: ["CMD", "pg_isready", "-U", "postgres"], interval: 3s, retries: 20}
+    networks: [back]
   cache:
     image: redis:alpine
     volumes: ["redisdata:/data"]
+    networks: [back]
+networks: {front: {}, back: {}}
 volumes: {pgdata: {}, redisdata: {}}

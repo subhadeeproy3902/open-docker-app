@@ -36,6 +36,16 @@ and the project uses [Semantic Versioning](https://semver.org/).
 - **Dockerize a folder** (#31, Stacks): detects Node.js (npm / yarn / pnpm), Python (pip / uv, Flask / FastAPI /
   Django), Go, Java (Maven / Gradle) and static sites, writes a Dockerfile, .dockerignore and compose.yaml to read and
   edit before saving, then builds and runs it if you want.
+- **Environment and secrets per stack** (#23, Stacks → ⋮): every variable of every service with where it comes from
+  (compose file, `${…}` from .env, env_file, image default, set when created), secrets masked until shown, values
+  that differ between services, and editing the .env / env_file files with checks — saving recreates only the
+  services whose settings changed.
+- **Dependency graph** (#14, Stacks → ⋮): services with state and health, depends_on arrows with their condition,
+  each service's networks, volumes under the services that mount them. Click a service to open it.
+- **Network map** (#33, Networks → Map): networks with their containers and IPs, published ports, live traffic, and
+  a reachability check — "can web reach api on port 8000?" — run from inside the container's network.
+- The demo stack (tools/demo) now has two networks, depends_on with a health condition, environment variables with
+  secrets, an env_file and an api that listens on port 8000.
 
 ### Changed
 - Flatpak builds on the GNOME 51 runtime (was 48). A Flathub-ready manifest that builds a pinned release tag is in

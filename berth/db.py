@@ -318,7 +318,16 @@ class Backend:
                     return out.strip()
         return ""
 
+    remote = None          # {"host", "port", "tls", ...} for a database outside Docker (db_external.py)
+
     def close(self):
+        cid = getattr(self, "_client_helper", None)
+        if cid:                                     # the client container of an outside database
+            try:
+                self.engine.remove_container(cid, force=True)
+            except Exception:  # noqa: BLE001
+                pass
+            self._client_helper = None
         hid = getattr(self, "_http_helper", None)
         if hid:
             try:
@@ -377,6 +386,8 @@ class Postgres(Backend):
 
     def _psql(self, sql, readonly=True, db=None, file=None):
         env = {"PGPASSWORD": self.password or "", "PGCONNECT_TIMEOUT": "10",
+               **({"PGHOST": self.remote["host"], "PGPORT": str(self.remote["port"]),
+                   "PGSSLMODE": self.remote.get("sslmode") or "prefer"} if self.remote else {}),
                "PGOPTIONS": "-c statement_timeout=60000 -c standard_conforming_strings=on"
                             + (" -c default_transaction_read_only=on" if readonly else "")}
         cmd = ["psql", "-X", "-q", "-v", "ON_ERROR_STOP=1", "--csv", "-P", f"null={NULL}", "-U", self.user,
@@ -582,6 +593,10 @@ class MySQL(Backend):
             if not self.client:
                 raise DbError("This image has no mysql / mariadb client")
         cmd = [self.client, "--batch", "--column-names", "--connect-timeout=10", "-u", self.user]
+        if self.remote:
+            cmd += ["-h", self.remote["host"], "-P", str(self.remote["port"])]
+            if self.client == "mariadb":            # self-signed certificates are common on local and cloud servers
+                cmd += ["--skip-ssl-verify-server-cert"] if self.remote.get("tls") else ["--skip-ssl"]
         if db or self.db:
             cmd.append(f"--database={db or self.db}")
         env = {"MYSQL_PWD": self.password or ""}
@@ -740,16 +755,24 @@ class Redis(Backend):
             self.cli = self.which("redis-cli", "valkey-cli", "keydb-cli")
             if not self.cli:
                 raise DbError("This image has no redis-cli")
-            code, out, _e, _t = self.exec([self.cli, "--json", "PING"], env=self._auth(), timeout=10)
+            code, out, _e, _t = self.exec([self.cli, *self._where(), "--json", "PING"], env=self._auth(), timeout=10)
             self.json = code == 0 and "PONG" in out
         mode = ["--raw"] if raw else (["--json"] if self.json else ["--no-raw"])
-        code, out, err, trunc = self.exec([self.cli, "-n", self.db, *mode, *args], env=self._auth(), timeout=60)
+        code, out, err, trunc = self.exec([self.cli, *self._where(), "-n", self.db, *mode, *args], env=self._auth(),
+                                          timeout=60)
         if code != 0 or out.startswith("(error)") or (out.startswith("ERR") and raw):
             raise DbError((err or out).strip().replace("(error) ", "") or "redis-cli failed")
         return out, trunc
 
     def _auth(self):
         return {"REDISCLI_AUTH": self.password} if self.password else None
+
+    def _where(self):
+        r = self.remote
+        if not r:
+            return []
+        return ["-h", r["host"], "-p", str(r["port"])] + (["--user", r["user"]] if r.get("user") else []) + \
+            (["--tls", "--insecure"] if r.get("tls") else [])
 
     def _val(self, *args):
         out, _t = self._cli(*args)
@@ -997,7 +1020,9 @@ class Mongo(Backend):
         env = dict(extra or {})
         if self.user:
             env.update(BERTH_U=self.user, BERTH_P=self.password)
-        cmd = ["mongosh", "mongodb://127.0.0.1:27017/" + self.db, "--quiet", "--norc", "--eval", MONGO_AUTH + js]
+        base = self.remote["uri"] if self.remote else "mongodb://127.0.0.1:27017/"
+        cmd = ["mongosh", base.rstrip("/") + "/" + self.db + (self.remote.get("query", "") if self.remote else ""),
+               "--quiet", "--norc", "--eval", MONGO_AUTH + js]
         code, out, err, trunc = self.exec(cmd, env=env or None, timeout=timeout)
         if trunc:                            # we stopped reading; mongosh then exits non-zero — not a real error
             raise DbError("The reply is too large to show at once")

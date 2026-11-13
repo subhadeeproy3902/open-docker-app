@@ -1009,7 +1009,24 @@ class Explorer(Gtk.Box):
         self.views.add_titled_with_icon(data, "data", "Data", "view-grid-symbolic")
 
         self.struct = ResultGrid(self.win, what="column", null_text="—")
-        self.views.add_titled_with_icon(self.struct, "structure", "Structure", "view-list-bullet-symbolic")
+        from . import db_schema
+        if db_schema.supported(backend):            # schema editing for SQL engines
+            sbox = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
+            sbar = Gtk.Box(spacing=6)
+            for lbl, act, tip in (("New table…", "table", "Create a table in this schema"),
+                                  ("Add column…", "add", "Add a column to this table"),
+                                  ("Rename column…", "rename", "Rename a column of this table"),
+                                  ("Drop column…", "drop", "Remove a column and its data"),
+                                  ("Add index…", "index", "Index one or more columns")):
+                bt = Gtk.Button(label=lbl, tooltip_text=tip)
+                bt.connect("clicked", lambda *_a, a=act: self._schema(a))
+                sbar.append(bt)
+            sbox.append(sbar)
+            sbox.append(self.struct)
+            self.struct.set_vexpand(True)
+            self.views.add_titled_with_icon(sbox, "structure", "Structure", "view-list-bullet-symbolic")
+        else:
+            self.views.add_titled_with_icon(self.struct, "structure", "Structure", "view-list-bullet-symbolic")
 
         q = Gtk.Paned(orientation=Gtk.Orientation.VERTICAL, position=170, shrink_start_child=False)
         ed = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=8)
@@ -1019,15 +1036,27 @@ class Explorer(Gtk.Box):
         keys = Gtk.EventControllerKey()
         keys.connect("key-pressed", self._editor_key)
         self.editor.add_controller(keys)
+        # several query tabs, each with its own text and result
+        self.qtabs, self.qcur = [{"text": backend.example(), "result": None}], 0
+        self.qbar = Gtk.Box(spacing=4)
+        ed.append(self.qbar)
+        self._qbar()
         ed.append(table_card(Gtk.ScrolledWindow(child=self.editor, min_content_height=90)))
         row = Gtk.Box(spacing=8)
-        self.run = Gtk.Button(label="Run", tooltip_text="Run (Ctrl+Enter)")
+        self.run = Gtk.Button(label="Run", tooltip_text="Run (Ctrl+Enter) — only the selected text when something "
+                                                       "is selected")
         self.run.add_css_class("suggested-action")
         self.run.connect("clicked", lambda *_: self._run())
         row.append(self.run)
         self.hist = Gtk.MenuButton(icon_name="document-open-recent-symbolic", tooltip_text="Recent queries")
         self.hist.add_css_class("flat")
         row.append(self.hist)
+        self.saved = Gtk.MenuButton(icon_name="starred-symbolic", tooltip_text="Saved queries")
+        self.saved.add_css_class("flat")
+        self.saved_pop = Gtk.Popover()
+        self.saved_pop.connect("show", lambda *_: self._fill_saved())
+        self.saved.set_popover(self.saved_pop)
+        row.append(self.saved)
         row.append(label({"sql": "SQL", "redis": "Redis commands, one per line", "yql": "YQL, a JSON query, or "
                           "GET/POST /path", "http": "METHOD /path, then an optional JSON body", "mongo":
                           "mongosh code (needs “Allow changes”)"}.get(backend.language, ""),
@@ -1626,9 +1655,125 @@ class Explorer(Gtk.Box):
             return True
         return False
 
+    # query tabs
+    def _qbar(self):
+        while (c := self.qbar.get_first_child()) is not None:
+            self.qbar.remove(c)
+        first = None
+        for i, _t in enumerate(self.qtabs):
+            b = Gtk.ToggleButton(label=f"Query {i + 1}", active=i == self.qcur, group=first)
+            first = first or b
+            b.connect("toggled", lambda bt, i=i: bt.get_active() and self._qswitch(i))
+            self.qbar.append(b)
+        add = Gtk.Button(icon_name="list-add-symbolic", tooltip_text="New query tab")
+        add.add_css_class("flat")
+        add.connect("clicked", lambda *_: self._qnew())
+        self.qbar.append(add)
+        if len(self.qtabs) > 1:
+            x = Gtk.Button(icon_name="window-close-symbolic", tooltip_text="Close this query tab")
+            x.add_css_class("flat")
+            x.connect("clicked", lambda *_: self._qclose())
+            self.qbar.append(x)
+
+    def _qtext(self):
+        buf = self.editor.get_buffer()
+        return buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)
+
+    def _qswitch(self, i):
+        if i == self.qcur:
+            return
+        self.qtabs[self.qcur]["text"] = self._qtext()
+        self.qcur = i
+        t = self.qtabs[i]
+        self.editor.get_buffer().set_text(t["text"])
+        if t["result"] is not None:
+            self.out.show(t["result"])
+        else:
+            self.out.message("Nothing run yet", "Write a query above and press Run (Ctrl+Enter).")
+
+    def _qnew(self):
+        self.qtabs[self.qcur]["text"] = self._qtext()
+        self.qtabs.append({"text": "", "result": None})
+        self.qcur = len(self.qtabs) - 1
+        self.editor.get_buffer().set_text("")
+        self.out.message("Nothing run yet", "Write a query above and press Run (Ctrl+Enter).")
+        self._qbar()
+
+    def _qclose(self):
+        self.qtabs.pop(self.qcur)
+        self.qcur = max(0, self.qcur - 1)
+        t = self.qtabs[self.qcur]
+        self.editor.get_buffer().set_text(t["text"])
+        if t["result"] is not None:
+            self.out.show(t["result"])
+        self._qbar()
+
+    # saved queries (per database container)
+    def _fill_saved(self):
+        st = self.page.settings
+        saved = (st["db_saved"] or {}).get(self._hist_key(), [])
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=6, margin_start=10, margin_end=10, margin_top=10,
+                      margin_bottom=10)
+        for i, item in enumerate(saved):
+            r = Gtk.Box(spacing=4)
+            b = Gtk.Button(label=item["name"], hexpand=True, tooltip_text=item["text"][:400])
+            b.connect("clicked", lambda *_a, t=item["text"]: (self.saved_pop.popdown(),
+                                                               self.editor.get_buffer().set_text(t)))
+            r.append(b)
+            r.append(icon_button("user-trash-symbolic", "Forget this query", lambda i=i: self._forget_saved(i)))
+            box.append(r)
+        if not saved:
+            box.append(label("No saved queries for this database yet.", css=["dim-label", "caption"]))
+        e = Gtk.Entry(placeholder_text="Name for the query in the editor")
+        sv = Gtk.Button(label="Save")
+        sv.add_css_class("suggested-action")
+        go = lambda *_: e.get_text().strip() and self._save_query(e.get_text().strip())
+        sv.connect("clicked", go)
+        e.connect("activate", go)
+        r = Gtk.Box(spacing=4)
+        r.append(e)
+        r.append(sv)
+        box.append(r)
+        self.saved_pop.set_child(box)
+
+    def _save_query(self, name):
+        st = self.page.settings
+        allq = dict(st["db_saved"] or {})
+        lst = [x for x in allq.get(self._hist_key(), []) if x["name"] != name]
+        allq[self._hist_key()] = lst + [{"name": name, "text": self._qtext()}]
+        st["db_saved"] = allq
+        self.saved_pop.popdown()
+        self.win.toast(f"Saved “{name}”")
+
+    def _forget_saved(self, i):
+        st = self.page.settings
+        allq = dict(st["db_saved"] or {})
+        lst = list(allq.get(self._hist_key(), []))
+        if 0 <= i < len(lst):
+            lst.pop(i)
+        allq[self._hist_key()] = lst
+        st["db_saved"] = allq
+        self._fill_saved()
+
+    # schema editing (SQL engines)
+    def _schema(self, action):
+        from .db_schema import SchemaDialog
+        if action != "table" and (self.node is None or not self.node.leaf):
+            return self.win.toast("Pick a table on the left first")
+        cols = []
+        r = self.struct.result if self._struct_for is self.node else None
+        if r is not None:
+            cols = [row[0] for row in r.rows]
+        if action in ("rename", "drop", "index") and not cols:
+            self.views.set_visible_child_name("structure")
+            return self.win.toast("Loading the table's columns — try again in a moment")
+        SchemaDialog(self, action, cols).present(self.win)
+
     def _run(self):
         buf = self.editor.get_buffer()
-        text = buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False).strip()
+        sel = buf.get_selection_bounds()
+        text = (buf.get_text(*sel, False) if sel else
+                buf.get_text(buf.get_start_iter(), buf.get_end_iter(), False)).strip()
         if not text:
             return
         if self.allow and self.b.is_destructive(text):
@@ -1643,9 +1788,13 @@ class Explorer(Gtk.Box):
         self.out.loading()
         allow = self.allow
 
+        tab = self.qtabs[self.qcur]
+
         def done(r):
             self.run.set_sensitive(True)
-            self.out.show(r)
+            tab["result"] = r
+            if tab is self.qtabs[self.qcur]:
+                self.out.show(r)
             self._remember(text)
 
         def fail(e):
@@ -1711,7 +1860,10 @@ class DatabasesPage(TablePage):
     def header_buttons(self):
         b = Gtk.Button(label="Open SQLite file…", valign=Gtk.Align.CENTER)
         b.connect("clicked", lambda *_: SqliteDialog(self).present(self.win))
-        return [b]
+        c = Gtk.Button(label="Connect…", valign=Gtk.Align.CENTER,
+                       tooltip_text="A database outside Docker: on this computer or in the cloud")
+        c.connect("clicked", lambda *_: ConnectDialog(self).present(self.win))
+        return [c, b]
 
     def activatable(self):
         return True
@@ -1864,6 +2016,66 @@ class DatabasesPage(TablePage):
         page = Adw.NavigationPage(title=title, child=ex, tag=detail_tag("db"))
         page.connect("hidden", lambda *_: ex.close())
         push_detail(self.nav, page)
+
+
+class ConnectDialog(Adw.Dialog):
+    """A database outside Docker, from a connection string (db_external.py)."""
+
+    def __init__(self, page):
+        super().__init__(title="Connect to a database", content_width=560)
+        self.page, self.win = page, page.win
+        tv = Adw.ToolbarView()
+        hb = Adw.HeaderBar(show_end_title_buttons=False, show_start_title_buttons=False)
+        cancel = Gtk.Button(label="Cancel")
+        cancel.connect("clicked", lambda *_: self.close())
+        hb.pack_start(cancel)
+        self.go = Gtk.Button(label="Connect")
+        self.go.add_css_class("suggested-action")
+        self.go.connect("clicked", lambda *_: self._go())
+        hb.pack_end(self.go)
+        tv.add_top_bar(hb)
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=14, margin_start=18, margin_end=18, margin_bottom=18)
+        g = Adw.PreferencesGroup(description="PostgreSQL, MySQL / MariaDB, Redis / Valkey or MongoDB — on this computer "
+                                             "or anywhere you can reach. Berth runs the database's own client in a "
+                                             "short-lived container; nothing is installed here.")
+        self.url = Adw.PasswordEntryRow(title="Connection string, e.g. postgres://user:password@localhost:5432/app")
+        self.url.connect("entry-activated", lambda *_: self._go())
+        g.add(self.url)
+        box.append(g)
+        recent = list(page.settings["db_external"] or [])
+        if recent:
+            rg = Adw.PreferencesGroup(title="Recent", description="Passwords are not remembered — type it again.")
+            for r in recent[-6:][::-1]:
+                row = Adw.ActionRow(title=esc(r), activatable=True)
+                row.add_css_class("monospace-title")
+                row.connect("activated", lambda _r, r=r: (self.url.set_text(r), self.url.grab_focus()))
+                rg.add(row)
+            box.append(rg)
+        self.status = Gtk.Label(xalign=0, wrap=True, css_classes=["caption", "dim-label"])
+        box.append(self.status)
+        tv.set_content(box)
+        self.set_child(tv)
+
+    def _go(self):
+        from . import db_external
+        url = self.url.get_text().strip()
+        if not url:
+            return
+        self.go.set_sensitive(False)
+        self.status.set_text("Starting the client and connecting…")
+        eng = self.page.store.engine
+
+        def done(b):
+            st = self.page.settings
+            red = db_external.redact(url)
+            st["db_external"] = [x for x in (st["db_external"] or []) if x != red][-9:] + [red]
+            self.close()
+            self.page.open_backend(b, b.name, on_close=b.close)
+
+        def fail(e):
+            self.go.set_sensitive(True)
+            self.status.set_text(f"Couldn't connect: {e}")
+        bg(db_external.open_external, eng, url, done=done, error=fail)
 
 
 class SqliteDialog(Adw.Dialog):

@@ -36,6 +36,9 @@ and the project uses [Semantic Versioning](https://semver.org/).
   recreates the containers that use it with the same settings.
 - **Ctrl+K / ⌘K** (and a Search button in the sidebar): jump to any container, stack, image, volume, network,
   database or page, or start a common task.
+- **Windows: no setup with Docker Desktop.** Berth talks to Docker Desktop (and Podman) through the Windows named
+  pipe, like the `docker` command — the unsafe "Expose daemon on tcp://localhost:2375" setting is no longer needed.
+  Tested in CI on a Windows runner with Docker (ping, lists, live streams, a container's logs).
 - **Remote engines over SSH**: `ssh://user@host` in Settings — the system's OpenSSH and your keys, one tunnel per
   engine, clear messages when keys or the remote socket are the problem.
 - **Update notice**: once a day Berth asks GitHub for the latest release and shows a banner (Settings → off; never

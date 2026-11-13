@@ -191,10 +191,8 @@ then `python3 -m berth` in a clone.
 > Full step-by-step guide: **[docs/INSTALL-Windows.md](docs/INSTALL-Windows.md)** (no certificate needed).
 
 Download **`Berth-windows-x64.zip`** from the [latest release](https://github.com/subhadeeproy3902/open-docker-app/releases/latest),
-unzip, run `Berth.exe`. Connect it to an engine over TCP:
-
-- Docker Desktop: *Settings → General → Expose daemon on tcp://localhost:2375 without TLS* (Berth uses that address by default), or
-- Docker Engine inside WSL 2 listening on `tcp://localhost:2375`.
+unzip, run `Berth.exe`. With **Docker Desktop** running there is nothing to set up: Berth talks to it through its named
+pipe, like the `docker` command does. A Docker Engine inside WSL 2 works too (`tcp://localhost:2375`, see the guide).
 
 The smoothest Windows experience today is running the **Linux build inside WSL 2** (WSLg shows the window):
 `curl -fsSL https://raw.githubusercontent.com/subhadeeproy3902/open-docker-app/main/scripts/install.sh | sh` in your WSL distro.
@@ -262,7 +260,7 @@ notes: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 - [ ] Signed + notarized macOS build, signed Windows installer (MSI)
 - [ ] Flathub and AUR listings
-- [ ] Native Windows named-pipe support (no TCP setting needed)
+- [x] Native Windows named-pipe support (no TCP setting needed)
 - [ ] SSH remote engines (`ssh://` contexts)
 - [ ] Volume backup schedules and snapshot/restore
 - [ ] Image layer explorer (files per layer, wasted space)

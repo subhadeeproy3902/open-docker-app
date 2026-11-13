@@ -104,9 +104,7 @@ all of them).
 
 ## Whole app
 
-- [ ] **P2** Windows: talk to Docker Desktop's named pipe directly (today Docker Desktop must expose
-      tcp://localhost:2375, or use an ssh:// engine)
-
+- [x] **P2** Windows: Berth talks to Docker Desktop's named pipe directly (no TCP setting)
 - [x] **P1** Search everything (Ctrl+K / ⌘K, and a Search button in the sidebar): containers, stacks, images, volumes,
       networks, databases, pages and tasks
 - [x] **P1** Remote engines over SSH (ssh://user@host — the system's OpenSSH and your keys)

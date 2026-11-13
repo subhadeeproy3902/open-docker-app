@@ -20,6 +20,7 @@ import os
 import re
 import shlex
 import socket
+import sys
 import sqlite3
 import ssl
 import tarfile
@@ -1110,6 +1111,8 @@ class Http:
         host = "127.0.0.1"
         if eng.path.startswith("tcp://"):
             host = eng.path[6:].rsplit(":", 1)[0] or "127.0.0.1"
+        elif eng.path.startswith("ssh://"):                 # published ports live on the remote machine
+            host = urllib.parse.urlsplit(eng.path).hostname or host
         out = []
         ports = ((ins.get("NetworkSettings") or {}).get("Ports") or {}).get(f"{self.port}/tcp") or []
         for p in ports:
@@ -1117,8 +1120,11 @@ class Http:
             if p.get("HostPort"):
                 out.append((host if ip in ("", "0.0.0.0", "::", "127.0.0.1") else ip, int(p["HostPort"])))
                 break
-        if not eng.path.startswith("tcp://") and os.uname().sysname == "Linux" and "rootless" not in eng.path \
-                and not eng.path.startswith(f"/run/user/"):
+        # container IPs are reachable only from the Linux machine running a local rootful engine (not on macOS /
+        # Windows, not for tcp://, ssh:// or rootless engines)
+        local = eng.path.startswith(("/", "unix://"))
+        if local and sys.platform.startswith("linux") and "rootless" not in eng.path \
+                and not eng.path.startswith("/run/user/"):
             for net in ((ins.get("NetworkSettings") or {}).get("Networks") or {}).values():
                 if net.get("IPAddress"):
                     out.append((net["IPAddress"], self.port))
